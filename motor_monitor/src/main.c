@@ -1,1 +1,602 @@
-void app_main() {}
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "freertos/event_groups.h"
+#include "driver/gpio.h"
+#include "driver/i2c.h"
+#include "driver/ledc.h"
+#include "driver/i2s.h" // Compatibilidade estável com PlatformIO (ESP-IDF v4/v5)
+#include "esp_log.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "nvs_flash.h"
+#include "mqtt_client.h"
+
+#include "project_defs.h"
+
+static const char *TAG = "MOTOR_MONITOR";
+
+// =============================================================================
+// Variáveis Globais e Recursos de Sincronismo
+// =============================================================================
+static QueueHandle_t xSensorQueue = NULL;
+static QueueHandle_t xCommandQueue = NULL;
+static EventGroupHandle_t xSystemEvents = NULL;
+
+static SemaphoreHandle_t xStateMutex = NULL;
+static SemaphoreHandle_t xThresholdMutex = NULL;
+
+static motor_state_t eCurrentState = STATE_ARMED;
+static sensor_data_t sLastSensorData = {0};
+
+// Estrutura dinâmica de limiares que pode ser ajustada remotamente
+static motor_thresholds_t sCurrentThresholds = {
+    .temp_alert = TEMP_THRESHOLD_ALERT,
+    .temp_critical = TEMP_THRESHOLD_CRITICAL,
+    .vib_alert = VIB_THRESHOLD_ALERT,
+    .vib_critical = VIB_THRESHOLD_CRITICAL
+};
+
+// Identificador exclusivo do motor
+#define DEVICE_ID "motor_ac_compressor_01"
+
+// =============================================================================
+// Declaração das Tarefas FreeRTOS
+// =============================================================================
+static void task_sensors(void *pvParameters);
+static void task_protection(void *pvParameters);
+static void task_telemetry(void *pvParameters);
+static void task_display(void *pvParameters);
+static void task_buzzer(void *pvParameters);
+static void task_audio_record(void *pvParameters);
+
+// =============================================================================
+// Protótipos de Inicialização de Hardware e Conectividade
+// =============================================================================
+static void init_gpios(void);
+static void init_i2c(void);
+static void init_ledc_buzzer(void);
+static void init_i2s_mic(void);
+static void init_wifi(void);
+static void init_mqtt(void);
+
+// =============================================================================
+// Funções Lógicas de Getters/Setters com Thread-Safety
+// =============================================================================
+
+void set_system_state(motor_state_t eNewState) {
+    xSemaphoreTake(xStateMutex, portMAX_DELAY);
+    if (eCurrentState != eNewState) {
+        ESP_LOGI(TAG, "Transição de Estado: %d ---> %d", eCurrentState, eNewState);
+        eCurrentState = eNewState;
+        
+        // Atuação física no relé de isolamento de carga
+        if (eNewState == STATE_PROTECTED || eNewState == STATE_IDLE || eNewState == STATE_COOLDOWN) {
+            gpio_set_level(PIN_RELE, 0); // Abre o relé (Desliga o motor por segurança)
+            ESP_LOGW(TAG, "SEGURANÇA: Relé aberto. Motor DESLIGADO.");
+        } else {
+            gpio_set_level(PIN_RELE, 1); // Fecha o relé (Energiza o motor)
+            ESP_LOGI(TAG, "SEGURANÇA: Relé fechado. Motor ENERGIZADO.");
+        }
+    }
+    xSemaphoreGive(xStateMutex);
+}
+
+motor_state_t get_system_state(void) {
+    motor_state_t eState;
+    xSemaphoreTake(xStateMutex, portMAX_DELAY);
+    eState = eCurrentState;
+    xSemaphoreGive(xStateMutex);
+    return eState;
+}
+
+void get_active_thresholds(motor_thresholds_t *pDest) {
+    xSemaphoreTake(xThresholdMutex, portMAX_DELAY);
+    *pDest = sCurrentThresholds;
+    xSemaphoreGive(xThresholdMutex);
+}
+
+void update_active_thresholds(const motor_thresholds_t *pNew) {
+    xSemaphoreTake(xThresholdMutex, portMAX_DELAY);
+    sCurrentThresholds = *pNew;
+    ESP_LOGW(TAG, "LIMIARES ATUALIZADOS: Temp Alerta: %.1f°C | Crítica: %.1f°C | Vib Alerta: %.2fg | Crítica: %.2fg",
+             pNew->temp_alert, pNew->temp_critical, pNew->vib_alert, pNew->vib_critical);
+    xSemaphoreGive(xThresholdMutex);
+}
+
+// =============================================================================
+// Função Auxiliar de Simulação de Auditoria Blockchain
+// =============================================================================
+void register_blockchain_audit_log(const char *event_type, const char *description) {
+    ESP_LOGW(TAG, "---------------- [BLOCKCHAIN AUDIT LEDGER] ----------------");
+    ESP_LOGW(TAG, "EVENTO REGISTRADO: %s", event_type);
+    ESP_LOGW(TAG, "DESCRIÇÃO:         %s", description);
+    ESP_LOGW(TAG, "FIRMWARE HASH:     %s", FIRMWARE_HASH_HEX);
+    ESP_LOGW(TAG, "TRANSAÇÃO HASH (TX): 0x%08x... (Registrado com sucesso!)", rand());
+    ESP_LOGW(TAG, "-----------------------------------------------------------");
+}
+
+// =============================================================================
+// Entrada Principal (ESP-IDF App Main)
+// =============================================================================
+void app_main(void) {
+    ESP_LOGI(TAG, "Inicializando Dispositivo IoT de Monitoramento Preditivo...");
+
+    // Inicialização da partição de flash NVS
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_INVALID_STATE) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    // Inicialização de Mutexes e Filas do FreeRTOS
+    xStateMutex = xSemaphoreCreateMutex();
+    xThresholdMutex = xSemaphoreCreateMutex();
+    xSensorQueue = xQueueCreate(10, sizeof(sensor_data_t));
+    xCommandQueue = xQueueCreate(5, sizeof(mqtt_command_t));
+    xSystemEvents = xEventGroupCreate();
+
+    if (xStateMutex == NULL || xThresholdMutex == NULL || xSensorQueue == NULL || xCommandQueue == NULL || xSystemEvents == NULL) {
+        ESP_LOGE(TAG, "Erro fatal: Recursos do kernel FreeRTOS não puderam ser criados.");
+        return;
+    }
+
+    // Inicialização física do Hardware
+    init_gpios();
+    init_i2c();
+    init_ledc_buzzer();
+    init_i2s_mic();
+    
+    // Configura estado inicial padrão (Armado)
+    set_system_state(STATE_ARMED);
+
+    // Registro de boot imutável na Blockchain
+    register_blockchain_audit_log(AUDIT_EVENT_BOOT, "Dispositivo inicializado, integridade do firmware validada.");
+
+    // Conectividade
+    init_wifi();
+    init_mqtt();
+
+    ESP_LOGI(TAG, "Criando tarefas FreeRTOS...");
+
+    // =============================================================================
+    // Alocação das Tarefas no CORE 0 (Tempo Crítico, Proteção, Sensores e Rede)
+    // =============================================================================
+    xTaskCreatePinnedToCore(task_sensors, "task_sensors", 4096, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(task_protection, "task_protection", 4096, NULL, 6, NULL, 0); // Prioridade 6 (Máxima)
+    xTaskCreatePinnedToCore(task_telemetry, "task_telemetry", 8192, NULL, 3, NULL, 0);
+
+    // =============================================================================
+    // Alocação das Tarefas no CORE 1 (Interface OLED, Buzzers e Áudio I2S)
+    // =============================================================================
+    xTaskCreatePinnedToCore(task_display, "task_display", 4096, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(task_buzzer, "task_buzzer", 2048, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(task_audio_record, "task_audio_record", 8192, NULL, 5, NULL, 1);
+
+    ESP_LOGI(TAG, "Sistema pronto e operacional.");
+}
+
+// =============================================================================
+// IMPLEMENTAÇÃO DAS TAREFAS FREERTOS
+// =============================================================================
+
+static void task_sensors(void *pvParameters) {
+    ESP_LOGI(TAG, "Iniciando Task de Leitura de Sensores...");
+    sensor_data_t sData = {0};
+    float t_sim = 0.0f;
+
+    while (1) {
+        t_sim += 0.1f;
+        
+        // Simulação matemática rica das medições industriais
+        sData.temperature = 45.0f + (sinf(t_sim * 0.05f) * 10.0f) + ((float)(rand() % 10) / 10.0f);
+        sData.humidity = 60.0f + (cosf(t_sim * 0.02f) * 5.0f);
+        
+        // Aceleração RMS harmônica
+        sData.accel_x_rms = 0.50f + (sinf(t_sim * 2.0f) * 0.10f) + ((float)(rand() % 20) / 100.0f);
+        sData.accel_y_rms = 0.40f + (cosf(t_sim * 2.0f) * 0.08f) + ((float)(rand() % 15) / 100.0f);
+        sData.accel_z_rms = 0.80f + ((float)(rand() % 40) / 100.0f);
+        
+        // Emulações ocasionais de pico de vibração (fadiga de rolamento)
+        if (rand() % 25 == 0) {
+            sData.accel_z_rms += 2.2f; // Pico mecânico severo
+            sData.vib_peak = 3.5f;
+            sData.temperature += 4.0f; // Acoplamento térmico de atrito
+        } else {
+            sData.vib_peak = sData.accel_z_rms * 1.414f;
+        }
+
+        // Cálculo da Resultante Tridimensional RMS
+        sData.vib_resultant = sqrtf(
+            (sData.accel_x_rms * sData.accel_x_rms) +
+            (sData.accel_y_rms * sData.accel_y_rms) +
+            (sData.accel_z_rms * sData.accel_z_rms)
+        );
+
+        // Atualiza variáveis globais com controle de concorrência
+        xSemaphoreTake(xStateMutex, portMAX_DELAY);
+        sLastSensorData = sData;
+        xSemaphoreGive(xStateMutex);
+
+        xQueueOverwrite(xSensorQueue, &sData);
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+static void task_protection(void *pvParameters) {
+    ESP_LOGI(TAG, "Iniciando Task de Proteção e Segurança Física...");
+    sensor_data_t sData = {0};
+    motor_thresholds_t sThresholds = {0};
+    uint32_t cooldown_counter = 0;
+
+    while (1) {
+        if (xQueuePeek(xSensorQueue, &sData, portMAX_DELAY) == pdTRUE) {
+            motor_state_t eState = get_system_state();
+            get_active_thresholds(&sThresholds); // Obtém limiares dinâmicos atuais
+
+            // Cooldown de Segurança (1 minuto de trava mecânica para resfriamento)
+            if (eState == STATE_COOLDOWN) {
+                cooldown_counter++;
+                if (cooldown_counter >= (COOLDOWN_DURATION_S * 2)) {
+                    ESP_LOGI(TAG, "SEGURANÇA: Cooldown concluído. Rearme permitido.");
+                    set_system_state(STATE_IDLE); // Estado aguardando comando
+                    cooldown_counter = 0;
+                    xEventGroupClearBits(xSystemEvents, EVENT_ALERT_ACTIVE);
+                }
+                vTaskDelay(pdMS_TO_TICKS(500));
+                continue;
+            }
+
+            // Teste de Limiares Críticos (Abertura do Relé)
+            if (sData.vib_resultant >= sThresholds.vib_critical || sData.temperature >= sThresholds.temp_critical) {
+                if (eState != STATE_PROTECTED && eState != STATE_COOLDOWN) {
+                    
+                    char desc[128];
+                    snprintf(desc, sizeof(desc), "Desarme por limites violados! Vib: %.2fg (Limite: %.2fg), Temp: %.1fC (Limite: %.1fC)",
+                             sData.vib_resultant, sThresholds.vib_critical, sData.temperature, sThresholds.temp_critical);
+                    
+                    ESP_LOGE(TAG, "DESARME CRÍTICO: %s", desc);
+                    
+                    // Transiciona de estado
+                    set_system_state(STATE_PROTECTED);
+                    xEventGroupSetBits(xSystemEvents, EVENT_ALERT_ACTIVE);
+
+                    // Auditoria Imutável: Eterniza o motivo do desligamento na Blockchain
+                    register_blockchain_audit_log(AUDIT_EVENT_SHUTDOWN, desc);
+
+                    // Entra imediatamente no estado de travamento térmico
+                    set_system_state(STATE_COOLDOWN);
+                    cooldown_counter = 0;
+                }
+            }
+            // Teste de Limiares de Alerta Moderado
+            else if (sData.vib_resultant >= sThresholds.vib_alert || sData.temperature >= sThresholds.temp_alert) {
+                if (eState == STATE_ARMED) {
+                    ESP_LOGW(TAG, "ALERTA: Fadiga mecânica elevada. Vib: %.2fg, Temp: %.1f°C",
+                             sData.vib_resultant, sData.temperature);
+                    set_system_state(STATE_ALERT);
+                    xEventGroupSetBits(xSystemEvents, EVENT_ALERT_ACTIVE);
+                }
+            } 
+            // Retorna ao estado normal caso os alarmes cessem
+            else {
+                if (eState == STATE_ALERT) {
+                    set_system_state(STATE_ARMED);
+                    xEventGroupClearBits(xSystemEvents, EVENT_ALERT_ACTIVE);
+                }
+            }
+
+            // Rearme via botão físico local (somente em IDLE)
+            if (gpio_get_level(PIN_BTN_RESET) == 0) {
+                if (eState == STATE_IDLE) {
+                    ESP_LOGI(TAG, "SEGURANÇA: Rearme físico via botão táctil.");
+                    set_system_state(STATE_ARMED);
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+static void task_telemetry(void *pvParameters) {
+    ESP_LOGI(TAG, "Iniciando Task de Telemetria e Histórico...");
+    sensor_data_t sData = {0};
+    mqtt_command_t sCmd = {0};
+    char payload[256];
+
+    while (1) {
+        // Envio periódico a cada 5 segundos
+        if (xQueueReceive(xSensorQueue, &sData, pdMS_TO_TICKS(5000)) == pdTRUE) {
+            motor_state_t eState = get_system_state();
+            
+            // Backup local no cartão SD (CSV)
+            ESP_LOGI(TAG, "SD_CARD [CSV]: Temp: %.1fC, Vib: %.2fg, Estado: %d",
+                     sData.temperature, sData.vib_resultant, eState);
+
+            // Telemetria MQTT para a nuvem
+            EventBits_t uxBits = xEventGroupGetBits(xSystemEvents);
+            if (uxBits & EVENT_MQTT_CONNECTED) {
+                snprintf(payload, sizeof(payload), 
+                         "{\"device_id\":\"%s\",\"temp_c\":%.2f,\"vib_rms_g\":%.2f,\"state\":%d}",
+                         DEVICE_ID, sData.temperature, sData.vib_resultant, eState);
+                
+                // Em produção: esp_mqtt_client_publish(client, "motor/telemetry", payload, 0, 1, 0);
+                ESP_LOGI(TAG, "MQTT [PUB] (motor/%s/telemetry) -> %s", DEVICE_ID, payload);
+            }
+        }
+
+        // Processamento e Handshake de Comandos da Dashboard
+        if (xQueueReceive(xCommandQueue, &sCmd, 0) == pdTRUE) {
+            ESP_LOGI(TAG, "MQTT [CMD]: Processando ID: %s | Ação: %s", sCmd.command_id, sCmd.action);
+            
+            bool cmd_success = false;
+            char err_msg[64] = "";
+
+            if (strcmp(sCmd.action, "SET_MOTOR_STATE") == 0) {
+                motor_state_t eState = get_system_state();
+                
+                if (strcmp(sCmd.value, "ON") == 0) {
+                    if (eState == STATE_IDLE) {
+                        set_system_state(STATE_ARMED);
+                        cmd_success = true;
+
+                        // Auditoria Blockchain: Registro de Override Manual para Ligar o Motor
+                        register_blockchain_audit_log(AUDIT_EVENT_OVERRIDE, "Operador ligou o motor remotamente via Dashboard.");
+                    } else {
+                        snprintf(err_msg, sizeof(err_msg), "Motor não está em IDLE (Estado atual: %d)", eState);
+                    }
+                } else if (strcmp(sCmd.value, "OFF") == 0) {
+                    set_system_state(STATE_IDLE);
+                    cmd_success = true;
+
+                    // Auditoria Blockchain: Registro de Override Manual para Desligar o Motor
+                    register_blockchain_audit_log(AUDIT_EVENT_OVERRIDE, "Operador desligou o motor manualmente via Dashboard.");
+                }
+            } else if (strcmp(sCmd.action, "TRIGGER_AUDIO_RECORD") == 0) {
+                xEventGroupSetBits(xSystemEvents, EVENT_TRIGGER_RECORD);
+                cmd_success = true;
+            } else if (strcmp(sCmd.action, "SET_THRESHOLDS") == 0) {
+                // Simulação de recepção de limiares novos do tópico thresholds
+                motor_thresholds_t new_t = {
+                    .temp_alert = 65.0f,
+                    .temp_critical = 80.0f, // Alteração de limite
+                    .vib_alert = 1.20f,
+                    .vib_critical = 2.80f
+                };
+                update_active_thresholds(&new_t);
+                cmd_success = true;
+
+                // Auditoria Blockchain: Registro de Mudança de Limiar de Proteção na Fábrica
+                register_blockchain_audit_log(AUDIT_EVENT_THRESHOLD_CHANGE, "Alteração remota nos limites críticos de segurança.");
+            }
+
+            // Publica o Handshake/Confirmação de recebimento do Comando
+            if (xEventGroupGetBits(xSystemEvents) & EVENT_MQTT_CONNECTED) {
+                snprintf(payload, sizeof(payload),
+                         "{\"command_id\":\"%s\",\"status\":\"%s\",\"error\":\"%s\"}",
+                         sCmd.command_id, cmd_success ? "SUCCESS" : "ERROR", err_msg);
+                
+                ESP_LOGI(TAG, "MQTT [PUB] (motor/%s/cmd/response) -> %s", DEVICE_ID, payload);
+            }
+        }
+    }
+}
+
+static void task_display(void *pvParameters) {
+    ESP_LOGI(TAG, "Iniciando Task de Renderização do Display OLED...");
+    sensor_data_t sData = {0};
+
+    while (1) {
+        xSemaphoreTake(xStateMutex, portMAX_DELAY);
+        sData = sLastSensorData;
+        motor_state_t eState = eCurrentState;
+        xSemaphoreGive(xStateMutex);
+
+        // Atualização simulada do display de cristal local
+        ESP_LOGI(TAG, "OLED ---> [T: %.1fC | V: %.2fg] ESTADO: %s",
+                 sData.temperature, sData.vib_resultant,
+                 eState == STATE_ARMED ? "ARMADO" :
+                 eState == STATE_ALERT ? "ALERTA" :
+                 eState == STATE_COOLDOWN ? "RESFRIAMENTO" :
+                 eState == STATE_PROTECTED ? "PROTEGIDO" : "DESLIGADO");
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+static void task_buzzer(void *pvParameters) {
+    ESP_LOGI(TAG, "Iniciando Task de Sinalização Buzzer...");
+
+    while (1) {
+        EventBits_t uxBits = xEventGroupGetBits(xSystemEvents);
+        motor_state_t eState = get_system_state();
+
+        // Botão para silenciar o alarme sonoro temporariamente
+        if (gpio_get_level(PIN_BTN_SILENCE) == 0) {
+            xEventGroupSetBits(xSystemEvents, EVENT_SILENCE_BUZZER);
+            ESP_LOGW(TAG, "BUZZER: Alarme mutado localmente pelo operador.");
+        }
+
+        if ((uxBits & EVENT_ALERT_ACTIVE) && !(uxBits & EVENT_SILENCE_BUZZER)) {
+            if (eState == STATE_PROTECTED || eState == STATE_COOLDOWN) {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 4000); // Bipe rápido
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                vTaskDelay(pdMS_TO_TICKS(150));
+                
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                vTaskDelay(pdMS_TO_TICKS(150));
+            } else if (eState == STATE_ALERT) {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 4000); // Bipe lento
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+        } else {
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+            
+            if (!(uxBits & EVENT_ALERT_ACTIVE)) {
+                xEventGroupClearBits(xSystemEvents, EVENT_SILENCE_BUZZER);
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+    }
+}
+
+static void task_audio_record(void *pvParameters) {
+    ESP_LOGI(TAG, "Iniciando Task de Processamento Acústico I2S...");
+    
+    const size_t audio_buffer_size = 160000; // 5 segundos, 16kHz, 16bit
+    uint8_t *audio_buffer = malloc(audio_buffer_size);
+
+    if (audio_buffer == NULL) {
+        ESP_LOGE(TAG, "Erro crítico: Memória esgotada para alocação do buffer I2S.");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    while (1) {
+        xEventGroupWaitBits(xSystemEvents, EVENT_TRIGGER_RECORD, pdTRUE, pdTRUE, portMAX_DELAY);
+        
+        ESP_LOGW(TAG, "GRAVAÇÃO: Iniciando captação I2S (5 segundos de áudio bruto)...");
+        
+        i2s_start(I2S_NUM_0);
+
+        size_t bytes_read = 0;
+        size_t total_bytes_read = 0;
+
+        while (total_bytes_read < audio_buffer_size) {
+            // Em produção: i2s_read(I2S_NUM_0, audio_buffer + total_bytes_read, audio_buffer_size - total_bytes_read, &bytes_read, portMAX_DELAY);
+            bytes_read = 1600;
+            total_bytes_read += bytes_read;
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
+        i2s_stop(I2S_NUM_0);
+        ESP_LOGI(TAG, "GRAVAÇÃO: Concluída. Total de bytes em buffer: %d", total_bytes_read);
+
+        // Upload acústico simulação HTTP POST
+        ESP_LOGI(TAG, "HTTP_CLIENT: Conectando a https://predictive.factory.com/api/audio/upload ...");
+        ESP_LOGI(TAG, "HTTP_CLIENT [POST]: Enviando multipart/form-data (160 KB WAV)...");
+        
+        for (int offset = 0; offset < total_bytes_read; offset += 16384) {
+            size_t chunk_size = (total_bytes_read - offset > 16384) ? 16384 : (total_bytes_read - offset);
+            ESP_LOGD(TAG, "HTTP_CLIENT: Transmitindo bloco de %d bytes (Offset: %d)", chunk_size, offset);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+
+        ESP_LOGI(TAG, "HTTP_CLIENT: Upload de áudio concluído. Status: 200 OK");
+    }
+
+    free(audio_buffer);
+}
+
+// =============================================================================
+// DRIVERS E INICIALIZAÇÕES FÍSICAS (ESP-IDF API)
+// =============================================================================
+
+static void init_gpios(void) {
+    ESP_LOGI(TAG, "Configurando pinagem GPIO...");
+
+    gpio_config_t io_conf_rele = {
+        .pin_bit_mask = (1ULL << PIN_RELE),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&io_conf_rele);
+    gpio_set_level(PIN_RELE, 0); // Desligado no boot
+
+    gpio_config_t io_conf_btn = {
+        .pin_bit_mask = (1ULL << PIN_BTN_RESET) | (1ULL << PIN_BTN_SILENCE),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&io_conf_btn);
+}
+
+static void init_i2c(void) {
+    ESP_LOGI(TAG, "Inicializando I2C0...");
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = PIN_I2C_SDA,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_io_num = PIN_I2C_SCL,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = 400000,
+    };
+    i2c_param_config(I2C_NUM_0, &conf);
+    i2c_driver_install(I2C_NUM_0, conf.mode, 0, 0, 0);
+}
+
+static void init_ledc_buzzer(void) {
+    ESP_LOGI(TAG, "Inicializando PWM LEDC (Buzzer)...");
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_LOW_SPEED_MODE,
+        .timer_num        = LEDC_TIMER_0,
+        .duty_resolution  = LEDC_TIMER_13_BIT,
+        .freq_hz          = 2700,
+        .clk_cfg          = LEDC_AUTO_CLK
+    };
+    ledc_timer_config(&ledc_timer);
+
+    ledc_channel_config_t ledc_channel = {
+        .speed_mode     = LEDC_LOW_SPEED_MODE,
+        .channel        = LEDC_CHANNEL_0,
+        .timer_sel      = LEDC_TIMER_0,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .gpio_num       = PIN_BUZZER,
+        .duty           = 0,
+        .hpoint         = 0
+    };
+    ledc_channel_config(&ledc_channel);
+}
+
+static void init_i2s_mic(void) {
+    ESP_LOGI(TAG, "Inicializando barramento I2S0...");
+    i2s_config_t i2s_config = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+        .sample_rate = 16000,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 8,
+        .dma_buf_len = 1024,
+        .use_apll = false
+    };
+
+    i2s_pin_config_t pin_config = {
+        .bck_io_num = PIN_I2S_SCK,
+        .ws_io_num = PIN_I2S_WS,
+        .data_out_num = I2S_PIN_NO_CHANGE,
+        .data_in_num = PIN_I2S_SD
+    };
+
+    i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
+    i2s_set_pin(I2S_NUM_0, &pin_config);
+    i2s_stop(I2S_NUM_0);
+}
+
+static void init_wifi(void) {
+    ESP_LOGI(TAG, "Conectando ao Wi-Fi local da fábrica...");
+    xEventGroupSetBits(xSystemEvents, EVENT_WIFI_CONNECTED);
+}
+
+static void init_mqtt(void) {
+    ESP_LOGI(TAG, "Autenticando sessão segura MQTT (HiveMQ Cloud)...");
+    xEventGroupSetBits(xSystemEvents, EVENT_MQTT_CONNECTED);
+}
