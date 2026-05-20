@@ -10,6 +10,9 @@
 #include "driver/i2c.h"
 #include "driver/ledc.h"
 #include "driver/i2s.h" // Compatibilidade estável com PlatformIO (ESP-IDF v4/v5)
+#include "driver/sdspi_host.h"
+#include "esp_vfs_fat.h"
+#include "sdmmc_cmd.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -64,6 +67,7 @@ static void init_gpios(void);
 static void init_i2c(void);
 static void init_ledc_buzzer(void);
 static void init_i2s_mic(void);
+static void init_sd_card(void);
 static void init_wifi(void);
 static void init_mqtt(void);
 
@@ -154,6 +158,7 @@ void app_main(void) {
     init_i2c();
     init_ledc_buzzer();
     init_i2s_mic();
+    init_sd_card();
     
     // Configura estado inicial padrão (Armado)
     set_system_state(STATE_ARMED);
@@ -671,6 +676,49 @@ static void init_i2s_mic(void) {
     i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
     i2s_set_pin(I2S_NUM_0, &pin_config);
     i2s_stop(I2S_NUM_0);
+}
+
+static void init_sd_card(void) {
+    ESP_LOGI(TAG, "Inicializando barramento SPI para Cartão SD...");
+    
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = true,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024
+    };
+    
+    sdmmc_card_t *card;
+    const char mount_point[] = "/sdcard";
+    
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    spi_bus_config_t bus_cfg = {
+        .mosi_io_num = PIN_SD_MOSI,
+        .miso_io_num = PIN_SD_MISO,
+        .sclk_io_num = PIN_SD_SCK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 4000,
+    };
+    
+    esp_err_t ret = spi_bus_initialize(host.slot, &bus_cfg, SDSPI_DEFAULT_DMA_CHAN);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Falha ao inicializar o barramento SPI para o SD Card.");
+        return;
+    }
+    
+    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot_config.gpio_cs = PIN_SD_CS;
+    slot_config.host_id = host.slot;
+    
+    ESP_LOGI(TAG, "Montando sistema de arquivos FAT no Cartão SD...");
+    ret = esp_vfs_fat_sdspi_mount(mount_point, &host, &slot_config, &mount_config, &card);
+    
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Erro ao montar o cartão SD. Verifique se o cartão está inserido.");
+    } else {
+        ESP_LOGI(TAG, "Cartão SD montado com sucesso em %s! Capacidade: %llu MB", 
+                 mount_point, ((uint64_t)card->csd.capacity) * card->csd.sector_size / (1024 * 1024));
+    }
 }
 
 static void init_wifi(void) {
