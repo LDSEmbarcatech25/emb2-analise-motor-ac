@@ -20,6 +20,7 @@ const TOPICS = {
 let mqttClient = null;
 let simulationInterval = null;
 let isSimulationActive = false;
+let isSimulatedAnomalyActive = false;
 
 // Estado atual simulado ou recebido
 let appState = {
@@ -162,6 +163,7 @@ function renderDashboardState() {
     const stateSub = document.getElementById('motor-state-subtext');
     const btnRearme = document.getElementById('btn-rearme');
     const btnShutdown = document.getElementById('btn-shutdown');
+    const btnInjectAnomaly = document.getElementById('btn-inject-anomaly');
 
     // Telemetria textual
     valVib.innerText = appState.vibResultant.toFixed(2);
@@ -208,26 +210,31 @@ function renderDashboardState() {
         stateSub.innerText = "Monitoramento ativo. Relé fechado, motor energizado.";
         btnRearme.disabled = true;
         btnShutdown.disabled = false;
+        btnInjectAnomaly.disabled = false;
     } else if (appState.motorState === 'ALERT') {
         stateVal.classList.add('text-alert');
         stateSub.innerText = "Fadiga elevada ou aquecimento detectado! Risco moderado.";
         btnRearme.disabled = true;
         btnShutdown.disabled = false;
+        btnInjectAnomaly.disabled = false;
     } else if (appState.motorState === 'PROTECTED') {
         stateVal.classList.add('text-protected');
         stateSub.innerText = "DESARME DE SEGURANÇA! Relé aberto devido a violação crítica.";
         btnRearme.disabled = false;
         btnShutdown.disabled = true;
+        btnInjectAnomaly.disabled = true;
     } else if (appState.motorState === 'COOLDOWN') {
         stateVal.classList.add('text-cooldown');
         stateSub.innerText = "Resfriando carcaça do motor. Travamento mecânico ativo.";
         btnRearme.disabled = true;
         btnShutdown.disabled = true;
+        btnInjectAnomaly.disabled = true;
     } else if (appState.motorState === 'IDLE') {
         stateVal.classList.add('text-idle');
         stateSub.innerText = "Motor desligado manualmente pelo operador.";
         btnRearme.disabled = false;
         btnShutdown.disabled = true;
+        btnInjectAnomaly.disabled = true;
     }
 }
 
@@ -276,8 +283,15 @@ function runLocalSimulationStep() {
     
     let baseVib = 0.6 + (Math.sin(simTime * 1.5) * 0.15) + (Math.random() * 0.15);
     
+    // Se a injeção de anomalia manual estiver ativa no simulador local
+    if (isSimulatedAnomalyActive) {
+        baseVib += 2.8; // Garante violar o limite crítico de 3.0g
+        appState.temperature += 15.0; // Sobreaquecimento rápido
+        appState.vibPeak = baseVib * 1.8;
+        isSimulatedAnomalyActive = false; // Limpa para rodar o desarme uma única vez!
+    }
     // Injeta pico severo de teste de forma randômica (3% de chance)
-    if (Math.random() < 0.03) {
+    else if (Math.random() < 0.03) {
         baseVib += 2.6; // Viola limiar de 3.0g
         appState.temperature += 6.0;
         appState.vibPeak = baseVib * 1.8;
@@ -445,6 +459,9 @@ function publishMQTTCommand(action, value = "", duration = 0) {
         } else if (action === "SET_MOTOR_STATE" && value === "OFF") {
             appState.motorState = 'IDLE';
             addBlockchainAuditRow('OVERRIDE', "Operador desligou o motor manualmente via Dashboard.");
+        } else if (action === "INJECT_ANOMALY") {
+            isSimulatedAnomalyActive = true;
+            addBlockchainAuditRow('OVERRIDE', "Injeção de anomalia manual disparada via painel.");
         }
         renderDashboardState();
         return;
@@ -487,6 +504,11 @@ document.getElementById('btn-rearme').addEventListener('click', function() {
 // Botão de Parada de Emergência
 document.getElementById('btn-shutdown').addEventListener('click', function() {
     publishMQTTCommand("SET_MOTOR_STATE", "OFF");
+});
+
+// Botão de Injeção de Anomalia
+document.getElementById('btn-inject-anomaly').addEventListener('click', function() {
+    publishMQTTCommand("INJECT_ANOMALY");
 });
 
 // Envio do formulário de novos limiares

@@ -41,6 +41,9 @@ static motor_thresholds_t sCurrentThresholds = {
     .vib_critical = VIB_THRESHOLD_CRITICAL
 };
 
+// Flag de teste para injeção remota de anomalia
+static bool bInjectAnomaly = false;
+
 // Identificador exclusivo do motor
 #define DEVICE_ID "motor_ac_compressor_01"
 
@@ -218,6 +221,25 @@ static void task_sensors(void *pvParameters) {
             (sData.accel_z_rms * sData.accel_z_rms)
         );
 
+        // Injeção de Anomalia Progressiva (Para testes end-to-end de estresse)
+        if (bInjectAnomaly) {
+            static float fAnomalyAccumulator = 0.0f;
+            fAnomalyAccumulator += 0.25f; // Sobe 0.25g a cada ciclo (500ms)
+            
+            sData.vib_resultant += fAnomalyAccumulator;
+            sData.temperature += (fAnomalyAccumulator * 4.0f); // Aquece por fricção mecânica severa
+            
+            if (sData.vib_resultant > 6.0f) sData.vib_resultant = 6.0f;
+            if (sData.temperature > 95.0f) sData.temperature = 95.0f;
+            
+            ESP_LOGW(TAG, "ANOMALIA INJETADA: Vibração: %.2fg | Temperatura: %.1fC", 
+                     sData.vib_resultant, sData.temperature);
+        } else {
+            // Limpa o acumulador se o teste for desligado
+            static float fAnomalyAccumulator = 0.0f;
+            fAnomalyAccumulator = 0.0f;
+        }
+
         // Atualiza variáveis globais com controle de concorrência
         xSemaphoreTake(xStateMutex, portMAX_DELAY);
         sLastSensorData = sData;
@@ -265,6 +287,7 @@ static void task_protection(void *pvParameters) {
                     
                     // Transiciona de estado
                     set_system_state(STATE_PROTECTED);
+                    bInjectAnomaly = false; // Desativa a injeção de falha após o desarme bem-sucedido
                     xEventGroupSetBits(xSystemEvents, EVENT_ALERT_ACTIVE);
 
                     // Auditoria Imutável: Eterniza o motivo do desligamento na Blockchain
@@ -374,6 +397,10 @@ static void task_telemetry(void *pvParameters) {
 
                 // Auditoria Blockchain: Registro de Mudança de Limiar de Proteção na Fábrica
                 register_blockchain_audit_log(AUDIT_EVENT_THRESHOLD_CHANGE, "Alteração remota nos limites críticos de segurança.");
+            } else if (strcmp(sCmd.action, "INJECT_ANOMALY") == 0) {
+                bInjectAnomaly = true;
+                cmd_success = true;
+                ESP_LOGE(TAG, "TESTE: Comando de Injeção de Falha Recebido! Subindo vibração e calor.");
             }
 
             // Publica o Handshake/Confirmação de recebimento do Comando
