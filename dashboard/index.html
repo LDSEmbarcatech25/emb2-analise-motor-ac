@@ -31,16 +31,16 @@
             </div>
 
             <!-- Perfil de Usuário Logado -->
-            <div class="user-profile-container" style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; border: 1px solid rgba(255,255,255,0.1);">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <i class="fa-solid fa-user-shield" style="color: var(--accent); font-size: 20px;"></i>
+            <div class="user-profile-container" style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.1);">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 15px;">
+                    <i class="fa-solid fa-user-shield" style="color: var(--accent); font-size: 24px;"></i>
                     <div style="display: flex; flex-direction: column;">
-                        <span id="user-email-display" style="font-size: 12px; color: var(--text-primary); font-weight: 500;">...</span>
-                        <span id="user-role-display" style="font-size: 10px; color: var(--text-secondary); text-transform: uppercase;">CARREGANDO</span>
+                        <span id="user-email-display" style="font-size: 13px; color: var(--text-primary); font-weight: 600;">...</span>
+                        <span id="user-role-display" style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase;">CARREGANDO</span>
                     </div>
                 </div>
-                <button id="btn-logout" style="background: none; border: none; color: var(--error); cursor: pointer; padding: 5px;" title="Sair">
-                    <i class="fa-solid fa-sign-out-alt"></i>
+                <button id="btn-logout" style="width: 100%; padding: 8px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 6px; color: #fca5a5; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.3s; display: flex; justify-content: center; align-items: center; gap: 8px;" title="Encerrar Sessão">
+                    <i class="fa-solid fa-arrow-right-from-bracket"></i> Desconectar
                 </button>
             </div>
 
@@ -63,6 +63,19 @@
                     </button>
                     <button id="btn-inject-anomaly" class="btn-action btn-anomaly-style" disabled>
                         <i class="fa-solid fa-triangle-exclamation"></i> Injetar Anomalia
+                    </button>
+                </div>
+            </div>
+
+            <!-- NOVA ÁREA: RELATÓRIOS E ACOMPANHAMENTO -->
+            <div class="control-panel" style="margin-top: 15px;">
+                <h3 class="section-title">Relatórios & Histórico</h3>
+                <div class="operational-actions">
+                    <button id="btn-history" class="btn-action" style="background: rgba(139, 92, 246, 0.15); border: 1px solid rgba(139, 92, 246, 0.3); color: #c4b5fd;">
+                        <i class="fa-solid fa-chart-line"></i> Histórico de Eventos
+                    </button>
+                    <button id="btn-report" class="btn-action" style="background: rgba(139, 92, 246, 0.15); border: 1px solid rgba(139, 92, 246, 0.3); color: #c4b5fd;">
+                        <i class="fa-solid fa-file-pdf"></i> Emitir Relatório PDF
                     </button>
                 </div>
             </div>
@@ -246,6 +259,6 @@
     </div>
 
     <!-- Script Customizado da Aplicação -->
-    <script type="module" src="app.js"></script>
+    <script type="module" src="app.js?v=2"></script>
 </body>
 </html>

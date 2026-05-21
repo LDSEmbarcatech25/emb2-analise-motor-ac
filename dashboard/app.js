@@ -615,6 +615,17 @@ document.getElementById('thresholds-form').addEventListener('submit', function(e
     renderDashboardState();
 });
 
+// Botão de Histórico de Eventos
+document.getElementById('btn-history').addEventListener('click', function() {
+    alert("ℹ️ Painel de Histórico em Construção\n\nEm breve, esta janela exibirá os registros de alertas e anomalias extraídos diretamente do seu Banco de Dados PostgreSQL (Neon)!");
+});
+
+// Botão de Emitir Relatório PDF
+document.getElementById('btn-report').addEventListener('click', function() {
+    // Esconde elementos irrelevantes para a impressão se necessário (via CSS print media)
+    window.print();
+});
+
 // =============================================================================
 // EXECUÇÃO INICIAL
 // =============================================================================

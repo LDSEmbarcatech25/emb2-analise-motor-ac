@@ -444,6 +444,20 @@ input:checked + .slider:before {
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
 }
 
+.btn-action:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.btn-action:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.5);
+}
+
+.btn-action:active {
+    transform: translateY(0);
+}
+
 .chart-title {
     font-size: 15px;
     font-weight: 600;
