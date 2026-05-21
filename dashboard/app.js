@@ -3,6 +3,75 @@
    ============================================================================= */
 
 // =============================================================================
+// Controle de Acesso Baseado em Nível (RBAC) & Autenticação
+// =============================================================================
+const checkAuth = async () => {
+    const token = localStorage.getItem('kiira_token');
+    if (!token) {
+        window.location.href = 'login.html';
+        return;
+    }
+
+    try {
+        const response = await fetch('http://localhost:3000/api/auth/me', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        
+        if (!response.ok) throw new Error('Sessão expirada ou inválida');
+        
+        const data = await response.json();
+        const role = data.user.role;
+        const email = data.user.email;
+        
+        // Atualiza a identificação na UI
+        document.getElementById('user-email-display').textContent = email;
+        const roleText = role === 'admin' ? 'Engenheiro (Admin)' : (role === 'operator' ? 'Operador de Máquina' : 'Visualizador (Read-Only)');
+        document.getElementById('user-role-display').textContent = roleText;
+        
+        // 🔒 Aplica o RBAC (Role-Based Access Control) escondendo botões não autorizados
+        if (role === 'operator') {
+            const btnInject = document.getElementById('btn-inject-anomaly');
+            if (btnInject) btnInject.style.display = 'none';
+            
+            const btnSaveThreshold = document.querySelector('#form-thresholds button[type="submit"]');
+            if (btnSaveThreshold) {
+                btnSaveThreshold.disabled = true;
+                btnSaveThreshold.innerHTML = '<i class="fa-solid fa-lock"></i> Acesso Negado';
+            }
+        } else if (role === 'viewer') {
+            const controlsToHide = [
+                'btn-inject-anomaly', 'btn-rearm', 'btn-force-stop', 'btn-start-simulation'
+            ];
+            controlsToHide.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+            });
+            const formThreshold = document.getElementById('form-thresholds');
+            if (formThreshold) formThreshold.style.opacity = '0.5';
+            const btnSaveThreshold = document.querySelector('#form-thresholds button[type="submit"]');
+            if (btnSaveThreshold) btnSaveThreshold.disabled = true;
+        }
+    } catch (error) {
+        console.error('Erro de autenticação:', error);
+        localStorage.clear();
+        window.location.href = 'login.html';
+    }
+};
+
+// Verifica a autenticação imediatamente antes de montar os gráficos
+checkAuth();
+
+document.addEventListener('DOMContentLoaded', () => {
+    const btnLogout = document.getElementById('btn-logout');
+    if (btnLogout) {
+        btnLogout.addEventListener('click', () => {
+            localStorage.clear();
+            window.location.href = 'login.html';
+        });
+    }
+});
+
+// =============================================================================
 // Estado da Aplicação e Configurações
 // =============================================================================
 const DEVICE_ID = "motor_ac_compressor_01";

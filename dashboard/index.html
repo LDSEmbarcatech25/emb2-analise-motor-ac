@@ -30,6 +30,20 @@
                 </div>
             </div>
 
+            <!-- Perfil de Usuário Logado -->
+            <div class="user-profile-container" style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; border: 1px solid rgba(255,255,255,0.1);">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <i class="fa-solid fa-user-shield" style="color: var(--accent); font-size: 20px;"></i>
+                    <div style="display: flex; flex-direction: column;">
+                        <span id="user-email-display" style="font-size: 12px; color: var(--text-primary); font-weight: 500;">...</span>
+                        <span id="user-role-display" style="font-size: 10px; color: var(--text-secondary); text-transform: uppercase;">CARREGANDO</span>
+                    </div>
+                </div>
+                <button id="btn-logout" style="background: none; border: none; color: var(--error); cursor: pointer; padding: 5px;" title="Sair">
+                    <i class="fa-solid fa-sign-out-alt"></i>
+                </button>
+            </div>
+
             <div class="system-status-container">
                 <div class="status-label">CONEXÃO IOT (MQTT)</div>
                 <div id="mqtt-connection-badge" class="status-badge state-disconnected">

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kiira - Autenticação</title>
+    <link rel="stylesheet" href="login.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <div class="login-header">
+                <i class="fa-solid fa-microchip"></i>
+                <h2>Kiira Predict</h2>
+                <p>Acesso Restrito - Indústria 4.0</p>
+            </div>
+            
+            <form id="loginForm" class="login-form">
+                <div class="input-group">
+                    <label for="email">E-mail Operacional</label>
+                    <div class="input-wrapper">
+                        <i class="fa-solid fa-envelope"></i>
+                        <input type="email" id="email" required placeholder="admin@kiira.com">
+                    </div>
+                </div>
+                
+                <div class="input-group">
+                    <label for="password">Senha de Acesso</label>
+                    <div class="input-wrapper">
+                        <i class="fa-solid fa-lock"></i>
+                        <input type="password" id="password" required placeholder="••••••••">
+                    </div>
+                </div>
+                
+                <div id="errorMessage" class="error-message"></div>
+                
+                <button type="submit" class="btn-login" id="loginBtn">
+                    Autenticar <i class="fa-solid fa-arrow-right-to-bracket"></i>
+                </button>
+            </form>
+            
+            <div class="login-footer">
+                <p>Somente pessoal autorizado. Sujeito a auditoria.</p>
+                <div class="demo-credentials">
+                    <small><b>Acessos Criados no BD:</b><br>admin@kiira.com (admin123)<br>operador@kiira.com (operador123)<br>viewer@kiira.com (viewer123)</small>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="login.js"></script>
+</body>
+</html>
