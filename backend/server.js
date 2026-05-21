@@ -94,7 +94,13 @@ app.get('/api/auth/me', verifyToken, (req, res) => {
     res.json({ user: req.user });
 });
 
-app.listen(PORT, async () => {
-    console.log(`🚀 Servidor Backend JWT rodando na porta ${PORT}`);
-    await seedDatabase();
-});
+// Exporta o App para o Vercel Serverless Function
+module.exports = app;
+
+// Roda localmente apenas se não estiver no ambiente de produção do Vercel
+if (process.env.NODE_ENV !== 'production') {
+    app.listen(PORT, async () => {
+        console.log(`🚀 Servidor Backend JWT rodando na porta ${PORT}`);
+        await seedDatabase();
+    });
+}
