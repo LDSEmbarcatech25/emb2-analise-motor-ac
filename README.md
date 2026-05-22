@@ -149,14 +149,21 @@ pio device monitor
 ## Estrutura do Projeto
 
 ```text
-src/
-├── main.cpp
-├── sensors/
-├── connectivity/
-├── display/
-├── protection/
-├── audio/
-└── storage/
+emb2-analise-motor-ac/
+├── motor_monitor/          # Firmware ESP32-S3 (C / ESP-IDF / PlatformIO)
+│   ├── src/main.c          # Lógica principal e tarefas FreeRTOS
+│   ├── include/            # Headers e definições do projeto
+│   └── platformio.ini      # Configuração de build e credenciais Wi-Fi
+├── backend/                # API REST (Node.js / Express / Prisma)
+│   ├── server.js           # Servidor com autenticação JWT + RBAC
+│   ├── prisma/schema.prisma
+│   └── vercel.json         # Deploy serverless
+├── dashboard/              # Frontend (HTML / CSS / JS)
+│   ├── index.html          # Painel de monitoramento
+│   ├── app.js              # Lógica MQTT + gráficos + RBAC
+│   └── login.html / login.js
+└── docs/
+    └── relatorios/         # Relatórios e entregáveis do programa
 ```
 
 ---
@@ -170,6 +177,21 @@ src/
 | InfluxDB | Histórico temporal |
 | Grafana | Visualização |
 | Flask / Node.js | Recebimento de áudio |
+
+---
+
+## 📄 Relatórios e Entregáveis
+
+A documentação oficial do projeto está em [`docs/relatorios/`](./docs/relatorios/):
+
+| Documento | Descrição |
+|---|---|
+| [`Relatorio_Arquitetura_TESTE_Branch.pdf`](./docs/relatorios/Relatorio_Arquitetura_TESTE_Branch.pdf) | Arquitetura da branch de testes |
+| [`Relatorio_Empresarial_Viabilidade.pdf`](./docs/relatorios/Relatorio_Empresarial_Viabilidade.pdf) | Viabilidade empresarial e modelo de negócio |
+| [`Relatorio_Processo_Implementacao.pdf`](./docs/relatorios/Relatorio_Processo_Implementacao.pdf) | Processo e etapas de implementação |
+| [`Relatorio_Requisitos.pdf`](./docs/relatorios/Relatorio_Requisitos.pdf) | Levantamento e especificação de requisitos |
+| [`Relatorio_Tecnico_Arquitetura.pdf`](./docs/relatorios/Relatorio_Tecnico_Arquitetura.pdf) | Relatório técnico da arquitetura |
+| [`Diagramas_Sistema.pdf`](./docs/relatorios/Diagramas_Sistema.pdf) | Diagramas de blocos e fluxo do sistema |
 
 ---
 
