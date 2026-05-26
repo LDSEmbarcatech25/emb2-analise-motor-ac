@@ -78,7 +78,7 @@ app.post('/api/auth/login', async (req, res) => {
 // Middleware para verificar JWT
 const verifyToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+    const token = authHeader?.split(' ')[1];
 
     if (!token) return res.status(401).json({ error: 'Acesso negado' });
 

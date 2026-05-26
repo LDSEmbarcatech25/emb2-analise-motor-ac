@@ -31,7 +31,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
         localStorage.setItem('kiira_user_email', data.email);
 
         // Redirecionar para o painel de operação
-        window.location.href = 'index.html';
+        globalThis.location.href = 'index.html';
         
     } catch (error) {
         errorMsg.textContent = error.message;

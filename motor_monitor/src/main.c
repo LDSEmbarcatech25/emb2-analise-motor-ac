@@ -18,10 +18,31 @@
 #include "esp_event.h"
 #include "nvs_flash.h"
 #include "mqtt_client.h"
+#include "esp_netif.h"
 
 #include "project_defs.h"
+#include "ssd1306.h"
+#include "font8x8_basic.h"
+
+// =============================================================================
+// Hardware do Display OLED
+// =============================================================================
+static SSD1306_t dev;
+
+// =============================================================================
+// Credenciais de Rede — Altere antes de flashear!
+// =============================================================================
+#ifndef WIFI_SSID
+#define WIFI_SSID  "NomeDaRede"
+#endif
+#ifndef WIFI_PASS
+#define WIFI_PASS  "SenhaDaRede"
+#endif
+
+#define MQTT_BROKER_URI "mqtt://broker.hivemq.com:1883"
 
 static const char *TAG = "MOTOR_MONITOR";
+static esp_mqtt_client_handle_t s_mqtt_client = NULL;
 
 // =============================================================================
 // Variáveis Globais e Recursos de Sincronismo
@@ -144,7 +165,7 @@ void app_main(void) {
     // Inicialização de Mutexes e Filas do FreeRTOS
     xStateMutex = xSemaphoreCreateMutex();
     xThresholdMutex = xSemaphoreCreateMutex();
-    xSensorQueue = xQueueCreate(10, sizeof(sensor_data_t));
+    xSensorQueue = xQueueCreate(1, sizeof(sensor_data_t));  // Tamanho 1 exigido por xQueueOverwrite
     xCommandQueue = xQueueCreate(5, sizeof(mqtt_command_t));
     xSystemEvents = xEventGroupCreate();
 
@@ -166,14 +187,11 @@ void app_main(void) {
     // Registro de boot imutável na Blockchain
     register_blockchain_audit_log(AUDIT_EVENT_BOOT, "Dispositivo inicializado, integridade do firmware validada.");
 
-    // Conectividade
-    init_wifi();
-    init_mqtt();
-
     ESP_LOGI(TAG, "Criando tarefas FreeRTOS...");
 
     // =============================================================================
     // Alocação das Tarefas no CORE 0 (Tempo Crítico, Proteção, Sensores e Rede)
+    // Criadas ANTES do Wi-Fi para o display e sensores iniciarem imediatamente
     // =============================================================================
     xTaskCreatePinnedToCore(task_sensors, "task_sensors", 4096, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(task_protection, "task_protection", 4096, NULL, 6, NULL, 0); // Prioridade 6 (Máxima)
@@ -187,6 +205,10 @@ void app_main(void) {
     xTaskCreatePinnedToCore(task_audio_record, "task_audio_record", 8192, NULL, 5, NULL, 1);
 
     ESP_LOGI(TAG, "Sistema pronto e operacional.");
+
+    // Conectividade em background (não bloqueia mais o boot)
+    init_wifi();
+    init_mqtt();
 }
 
 // =============================================================================
@@ -263,7 +285,7 @@ static void task_protection(void *pvParameters) {
     uint32_t cooldown_counter = 0;
 
     while (1) {
-        if (xQueuePeek(xSensorQueue, &sData, portMAX_DELAY) == pdTRUE) {
+        if (xQueuePeek(xSensorQueue, &sData, pdMS_TO_TICKS(600)) == pdTRUE) {
             motor_state_t eState = get_system_state();
             get_active_thresholds(&sThresholds); // Obtém limiares dinâmicos atuais
 
@@ -350,12 +372,14 @@ static void task_telemetry(void *pvParameters) {
             // Telemetria MQTT para a nuvem
             EventBits_t uxBits = xEventGroupGetBits(xSystemEvents);
             if (uxBits & EVENT_MQTT_CONNECTED) {
-                snprintf(payload, sizeof(payload), 
+                snprintf(payload, sizeof(payload),
                          "{\"device_id\":\"%s\",\"temp_c\":%.2f,\"vib_rms_g\":%.2f,\"state\":%d}",
                          DEVICE_ID, sData.temperature, sData.vib_resultant, eState);
-                
-                // Em produção: esp_mqtt_client_publish(client, "motor/telemetry", payload, 0, 1, 0);
-                ESP_LOGI(TAG, "MQTT [PUB] (motor/%s/telemetry) -> %s", DEVICE_ID, payload);
+
+                char pub_topic[64];
+                snprintf(pub_topic, sizeof(pub_topic), "motor/%s/telemetry", DEVICE_ID);
+                int msg_id = esp_mqtt_client_publish(s_mqtt_client, pub_topic, payload, 0, 1, 0);
+                ESP_LOGI(TAG, "MQTT [PUB] (msg_id=%d) %s -> %s", msg_id, pub_topic, payload);
             }
         }
 
@@ -413,8 +437,11 @@ static void task_telemetry(void *pvParameters) {
                 snprintf(payload, sizeof(payload),
                          "{\"command_id\":\"%s\",\"status\":\"%s\",\"error\":\"%s\"}",
                          sCmd.command_id, cmd_success ? "SUCCESS" : "ERROR", err_msg);
-                
-                ESP_LOGI(TAG, "MQTT [PUB] (motor/%s/cmd/response) -> %s", DEVICE_ID, payload);
+
+                char rsp_topic[64];
+                snprintf(rsp_topic, sizeof(rsp_topic), "motor/%s/cmd/response", DEVICE_ID);
+                esp_mqtt_client_publish(s_mqtt_client, rsp_topic, payload, 0, 1, 0);
+                ESP_LOGI(TAG, "MQTT [PUB] (%s) -> %s", rsp_topic, payload);
             }
         }
     }
@@ -422,7 +449,19 @@ static void task_telemetry(void *pvParameters) {
 
 static void task_display(void *pvParameters) {
     ESP_LOGI(TAG, "Iniciando Task de Renderização do Display OLED...");
+    
+    // O barramento I2C já foi inicializado por init_i2c() no app_main.
+    // i2c_device_add associa o SSD1306 ao driver existente sem reinstalá-lo.
+    i2c_device_add(&dev, I2C_NUM_0, -1, I2C_ADDRESS);
+    ssd1306_init(&dev, 128, 64);
+    ssd1306_clear_screen(&dev, false);
+    ssd1306_contrast(&dev, 0xFF);
+    
+    // Tela Inicial / Logo Estático
+    ssd1306_display_text(&dev, 0, "  KiiRA MONITOR ", 16, true);
+
     sensor_data_t sData = {0};
+    char buf[24];
 
     while (1) {
         xSemaphoreTake(xStateMutex, portMAX_DELAY);
@@ -430,15 +469,27 @@ static void task_display(void *pvParameters) {
         motor_state_t eState = eCurrentState;
         xSemaphoreGive(xStateMutex);
 
-        // Atualização simulada do display de cristal local
-        ESP_LOGI(TAG, "OLED ---> [T: %.1fC | V: %.2fg] ESTADO: %s",
-                 sData.temperature, sData.vib_resultant,
-                 eState == STATE_ARMED ? "ARMADO" :
-                 eState == STATE_ALERT ? "ALERTA" :
-                 eState == STATE_COOLDOWN ? "RESFRIAMENTO" :
-                 eState == STATE_PROTECTED ? "PROTEGIDO" : "DESLIGADO");
+        const char *state_str = eState == STATE_ARMED ? "ARMADO  " :
+                                eState == STATE_ALERT ? "ALERTA  " :
+                                eState == STATE_COOLDOWN ? "RESFRIAR" :
+                                eState == STATE_PROTECTED ? "PROTEG. " : "DESLIG. ";
 
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // Linha de Status Global
+        snprintf(buf, sizeof(buf), "STS: %s", state_str);
+        ssd1306_display_text(&dev, 2, buf, strlen(buf), false);
+
+        // Linha de Temperatura
+        snprintf(buf, sizeof(buf), "Temp: %.1f C", sData.temperature);
+        ssd1306_display_text(&dev, 4, buf, strlen(buf), false);
+
+        // Linha de Vibração
+        snprintf(buf, sizeof(buf), "Vib:  %.2f g", sData.vib_resultant);
+        ssd1306_display_text(&dev, 6, buf, strlen(buf), false);
+
+        ESP_LOGI(TAG, "OLED ---> [T: %.1fC | V: %.2fg] ESTADO: %s",
+                 sData.temperature, sData.vib_resultant, state_str);
+
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
 
@@ -488,7 +539,7 @@ static void task_buzzer(void *pvParameters) {
 static void task_audio_record(void *pvParameters) {
     ESP_LOGI(TAG, "Iniciando Task de Processamento Acústico I2S...");
     
-    const size_t audio_buffer_size = 160000; // 5 segundos, 16kHz, 16bit (160 KB)
+    const size_t audio_buffer_size = 32000; // 1 segundo, 16kHz, 16bit (32 KB) — ajustado para RAM disponível
     uint8_t *audio_buffer = malloc(audio_buffer_size);
 
     if (audio_buffer == NULL) {
@@ -700,7 +751,7 @@ static void init_sd_card(void) {
         .max_transfer_sz = 4000,
     };
     
-    esp_err_t ret = spi_bus_initialize(host.slot, &bus_cfg, SDSPI_DEFAULT_DMA_CHAN);
+    esp_err_t ret = spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Falha ao inicializar o barramento SPI para o SD Card.");
         return;
@@ -721,12 +772,146 @@ static void init_sd_card(void) {
     }
 }
 
+// =============================================================================
+// Wi-Fi — Event Handler e Inicialização Real
+// =============================================================================
+static void wifi_event_handler(void *arg, esp_event_base_t event_base,
+                               int32_t event_id, void *event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGW(TAG, "Wi-Fi desconectado. Tentando reconectar...");
+        xEventGroupClearBits(xSystemEvents, EVENT_WIFI_CONNECTED);
+        esp_wifi_connect();
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI(TAG, "Wi-Fi conectado! IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        xEventGroupSetBits(xSystemEvents, EVENT_WIFI_CONNECTED);
+    }
+}
+
 static void init_wifi(void) {
-    ESP_LOGI(TAG, "Conectando ao Wi-Fi local da fábrica...");
-    xEventGroupSetBits(xSystemEvents, EVENT_WIFI_CONNECTED);
+    ESP_LOGI(TAG, "Inicializando Wi-Fi...");
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                                         &wifi_event_handler, NULL, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                                         &wifi_event_handler, NULL, NULL));
+
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid     = WIFI_SSID,
+            .password = WIFI_PASS,
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+        },
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_LOGI(TAG, "Aguardando conexão Wi-Fi (SSID: %s)...", WIFI_SSID);
+}
+
+// =============================================================================
+// MQTT — Event Handler e Inicialização Real
+// =============================================================================
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
+                               int32_t event_id, void *event_data)
+{
+    esp_mqtt_event_handle_t event  = (esp_mqtt_event_handle_t)event_data;
+    esp_mqtt_client_handle_t client = event->client;
+
+    switch ((esp_mqtt_event_id_t)event_id) {
+        case MQTT_EVENT_CONNECTED:
+            ESP_LOGI(TAG, "MQTT conectado ao broker!");
+            xEventGroupSetBits(xSystemEvents, EVENT_MQTT_CONNECTED);
+
+            // Subscreve nos tópicos de comando e limiares
+            esp_mqtt_client_subscribe(client, "motor/" DEVICE_ID "/cmd", 1);
+            esp_mqtt_client_subscribe(client, "motor/" DEVICE_ID "/thresholds", 1);
+            register_blockchain_audit_log(AUDIT_EVENT_BOOT, "MQTT conectado. Subscrito nos tópicos de comando.");
+            break;
+
+        case MQTT_EVENT_DISCONNECTED:
+            ESP_LOGW(TAG, "MQTT desconectado. Aguardando reconexão automática...");
+            xEventGroupClearBits(xSystemEvents, EVENT_MQTT_CONNECTED);
+            break;
+
+        case MQTT_EVENT_DATA: {
+            // Copia o tópico e payload para buffers terminados em \0
+            char topic[128]  = {0};
+            char payload[256] = {0};
+            int topic_len   = (event->topic_len   < (int)sizeof(topic)   - 1) ? event->topic_len   : (int)sizeof(topic)   - 1;
+            int payload_len = (event->data_len    < (int)sizeof(payload) - 1) ? event->data_len    : (int)sizeof(payload) - 1;
+            memcpy(topic,   event->topic, topic_len);
+            memcpy(payload, event->data,  payload_len);
+
+            ESP_LOGI(TAG, "MQTT [REC]: %s -> %s", topic, payload);
+
+            // Tópico de Comando: extrai action/value/command_id do JSON manualmente
+            char cmd_topic[128];
+            snprintf(cmd_topic, sizeof(cmd_topic), "motor/%s/cmd", DEVICE_ID);
+            if (strcmp(topic, cmd_topic) == 0) {
+                mqtt_command_t cmd = {0};
+                // Parser minimalista sem biblioteca JSON extra
+                // Formato esperado: {"command_id":"...","action":"...","value":"..."}
+                char *p;
+                if ((p = strstr(payload, "\"command_id\":\"")) != NULL) {
+                    sscanf(p, "\"command_id\":\"%39[^\"]\"", cmd.command_id);
+                }
+                if ((p = strstr(payload, "\"action\":\"")) != NULL) {
+                    sscanf(p, "\"action\":\"%31[^\"]\"", cmd.action);
+                }
+                if ((p = strstr(payload, "\"value\":\"")) != NULL) {
+                    sscanf(p, "\"value\":\"%15[^\"]\"", cmd.value);
+                }
+                // Enfileira para a task_telemetry processar
+                if (xQueueSend(xCommandQueue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
+                    ESP_LOGW(TAG, "Fila de comandos cheia! Comando descartado.");
+                }
+            }
+
+            // Tópico de Limiares: atualiza dinamicamente
+            char thr_topic[128];
+            snprintf(thr_topic, sizeof(thr_topic), "motor/%s/thresholds", DEVICE_ID);
+            if (strcmp(topic, thr_topic) == 0) {
+                motor_thresholds_t new_t = {0};
+                char *p;
+                if ((p = strstr(payload, "\"temp_alert_c\":")) != NULL)    sscanf(p, "\"temp_alert_c\":%f",    &new_t.temp_alert);
+                if ((p = strstr(payload, "\"temp_critical_c\":")) != NULL) sscanf(p, "\"temp_critical_c\":%f", &new_t.temp_critical);
+                if ((p = strstr(payload, "\"vib_alert_g\":")) != NULL)     sscanf(p, "\"vib_alert_g\":%f",     &new_t.vib_alert);
+                if ((p = strstr(payload, "\"vib_critical_g\":")) != NULL)  sscanf(p, "\"vib_critical_g\":%f",  &new_t.vib_critical);
+                if (new_t.temp_critical > 0 && new_t.vib_critical > 0) {
+                    update_active_thresholds(&new_t);
+                    register_blockchain_audit_log(AUDIT_EVENT_THRESHOLD_CHANGE, "Limiares atualizados remotamente via MQTT.");
+                }
+            }
+            break;
+        }
+        default:
+            break;
+    }
 }
 
 static void init_mqtt(void) {
-    ESP_LOGI(TAG, "Autenticando sessão segura MQTT (HiveMQ Cloud)...");
-    xEventGroupSetBits(xSystemEvents, EVENT_MQTT_CONNECTED);
+    // Aguarda Wi-Fi antes de conectar ao broker
+    ESP_LOGI(TAG, "Aguardando Wi-Fi para iniciar MQTT...");
+    xEventGroupWaitBits(xSystemEvents, EVENT_WIFI_CONNECTED, pdFALSE, pdTRUE, pdMS_TO_TICKS(30000));
+
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .broker.address.uri = MQTT_BROKER_URI,
+        .session.keepalive  = 30,
+    };
+
+    s_mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
+    ESP_ERROR_CHECK(esp_mqtt_client_register_event(s_mqtt_client, ESP_EVENT_ANY_ID,
+                                                    mqtt_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_mqtt_client_start(s_mqtt_client));
+    ESP_LOGI(TAG, "MQTT client iniciado. Broker: %s", MQTT_BROKER_URI);
 }

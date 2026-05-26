@@ -1,2 +1,12 @@
 # Credentials and local keys
 .appdeploy
+backend/.env
+
+# Build artifacts
+build/
+
+# Editor
+.vscode/
+
+# Node
+node_modules/
