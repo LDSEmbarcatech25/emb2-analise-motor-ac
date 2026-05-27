@@ -53,8 +53,6 @@ esp_err_t storage_init(void)
     return ESP_OK;
 }
 
-// ─── Log CSV ──────────────────────────────────────────────────────────────────
-
 esp_err_t storage_log(const sensor_data_t *data, float rms, alarm_level_t level)
 {
     if (!s_card) return ESP_ERR_INVALID_STATE;
@@ -65,14 +63,57 @@ esp_err_t storage_log(const sensor_data_t *data, float rms, alarm_level_t level)
         return ESP_FAIL;
     }
 
-    fprintf(f, "%lld,%.2f,%.1f,%.4f,%.4f,%.4f,%.4f,%s\n",
-            esp_timer_get_time(),           // microssegundos desde boot
-            data->env.temperature_c,
-            data->env.humidity_pct,
-            data->imu.ax, data->imu.ay, data->imu.az,
-            rms,
-            alarm_level_str(level));
+    // Se "data" for válido, grava os dados reais. Se for NULL (nosso teste atual), grava zeros.
+    if (data != NULL) {
+        fprintf(f, "%lld,%.2f,%.1f,%.4f,%.4f,%.4f,%.4f,%s\n",
+                esp_timer_get_time(),
+                data->env.temperature_c,
+                data->env.humidity_pct,
+                data->imu.ax, data->imu.ay, data->imu.az,
+                rms,
+                "NONE");
+    } else {
+        // Linha falsa gerada quando os sensores estão desligados
+        fprintf(f, "%lld,0.0,0.0,0.0,0.0,0.0,%.4f,NONE\n", 
+                esp_timer_get_time(), 
+                rms);
+    }
 
     fclose(f);
     return ESP_OK;
 }
+
+// // ─── Log CSV ──────────────────────────────────────────────────────────────────
+
+// esp_err_t storage_log(const sensor_data_t *data, float rms, alarm_level_t level)
+// {
+//     if (!s_card) return ESP_ERR_INVALID_STATE;
+
+//     FILE *f = fopen(SD_LOG_FILE, "a");
+//     if (!f) {
+//         ESP_LOGE(TAG, "Erro ao abrir arquivo de log");
+//         return ESP_FAIL;
+//     }
+
+//     // fprintf(f, "%lld,%.2f,%.1f,%.4f,%.4f,%.4f,%.4f,%s\n",
+//     //         esp_timer_get_time(),           // microssegundos desde boot
+//     //         data->env.temperature_c,
+//     //         data->env.humidity_pct,
+//     //         data->imu.ax, data->imu.ay, data->imu.az,
+//     //         rms,
+//     //         alarm_level_str(level));
+
+//     // fclose(f);
+
+//     fprintf(f, "%lld,%.2f,%.1f,%.4f,%.4f,%.4f,%.4f,%s\n",
+//             esp_timer_get_time(),           // microssegundos desde boot
+//             data->env.temperature_c,
+//             data->env.humidity_pct,
+//             data->imu.ax, data->imu.ay, data->imu.az,
+//             rms,
+//             "NONE"); // <-- Substitua aqui para testar sem o alarm.c compilado
+
+//     fclose(f);
+
+//     return ESP_OK;
+// }
