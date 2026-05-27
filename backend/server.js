@@ -3,6 +3,7 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -12,6 +13,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
 app.use(cors());
 app.use(express.json());
+
+// Serve o dashboard estático em desenvolvimento local
+app.use(express.static(path.join(__dirname, '../dashboard')));
 
 // Seed default users se não existirem
 async function seedDatabase() {
@@ -50,6 +54,11 @@ async function seedDatabase() {
 // Rota de Login
 app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
+
+    // Validação básica de entrada
+    if (!email || !password) {
+        return res.status(400).json({ error: 'E-mail e senha são obrigatórios' });
+    }
     
     try {
         const user = await prisma.user.findUnique({ where: { email } });

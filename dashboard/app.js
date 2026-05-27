@@ -44,7 +44,7 @@ const checkAuth = async () => {
     }
 
     try {
-        const response = await fetch('http://localhost:3000/api/auth/me', {
+        const response = await fetch(`${CONFIG.API_URL}/api/auth/me`, {
             headers: { 'Authorization': `Bearer ${token}` }
         });
 
@@ -82,7 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // Estado da Aplicação e Configurações
 // =============================================================================
 const DEVICE_ID = "motor_ac_compressor_01";
-const FIRMWARE_HASH = "d6a8f10b2c349e5d7f10b2c349e5d7f10b2c349e5d7f10b2c349e5d7f10b2c34";
+let FIRMWARE_HASH = "Aguardando Conexão...";
 
 // Tópicos MQTT (Hierarquia Industrial)
 const TOPICS = {
@@ -216,7 +216,7 @@ function addBlockchainAuditRow(eventType, description) {
     const tr = document.createElement('tr');
     const badgeClass = BADGE_CLASS_MAP[eventType] ?? 'badge-boot';
     const txShort = txHash.slice(0, 16);
-    const firmShort = FIRMWARE_HASH.slice(0, 12);
+    const firmShort = FIRMWARE_HASH.length > 15 ? FIRMWARE_HASH.slice(0, 12) : FIRMWARE_HASH;
 
     tr.innerHTML = String.raw`
         <td><strong>${timestampStr}</strong></td>
@@ -494,6 +494,15 @@ function onMessageArrived(message) {
             updateChart(appState.vibResultant, appState.temperature);
             renderDashboardState();
         } else if (topic === TOPICS.status) {
+            if (json.firmware_hash) {
+                FIRMWARE_HASH = json.firmware_hash;
+                const hashEl = document.getElementById('firmware-hash-display');
+                if (hashEl) {
+                    hashEl.title = FIRMWARE_HASH;
+                    hashEl.textContent = FIRMWARE_HASH.slice(0, 8) + '...';
+                }
+            }
+
             if (json.alert) {
                 appState.motorState = 'PROTECTED';
                 addBlockchainAuditRow('SHUTDOWN', `DESARME CRÍTICO! Causa: ${json.alert.cause} (Medido: ${json.alert.measured_value.toFixed(2)})`);

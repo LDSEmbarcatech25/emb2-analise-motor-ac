@@ -48,7 +48,9 @@ extern "C" {
 // Hash de Integridade do Firmware (Representação de 32 bytes para auditoria)
 // =============================================================================
 // Em produção, isso seria calculado dinamicamente ou inserido no build (SHA-256)
+#ifndef FIRMWARE_HASH_HEX
 #define FIRMWARE_HASH_HEX   "d6a8f10b2c349e5d7f10b2c349e5d7f10b2c349e5d7f10b2c349e5d7f10b2c34"
+#endif
 
 // =============================================================================
 // Códigos de Eventos de Auditoria Blockchain

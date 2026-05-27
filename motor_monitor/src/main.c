@@ -836,6 +836,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             esp_mqtt_client_subscribe(client, "motor/" DEVICE_ID "/cmd", 1);
             esp_mqtt_client_subscribe(client, "motor/" DEVICE_ID "/thresholds", 1);
             register_blockchain_audit_log(AUDIT_EVENT_BOOT, "MQTT conectado. Subscrito nos tópicos de comando.");
+            
+            // Publish boot status with firmware hash
+            char boot_topic[64];
+            snprintf(boot_topic, sizeof(boot_topic), "motor/%s/status", DEVICE_ID);
+            char boot_payload[256];
+            snprintf(boot_payload, sizeof(boot_payload), "{\"connection\":\"ONLINE\",\"firmware_hash\":\"%s\"}", FIRMWARE_HASH_HEX);
+            esp_mqtt_client_publish(client, boot_topic, boot_payload, 0, 1, 1);
             break;
 
         case MQTT_EVENT_DISCONNECTED:
