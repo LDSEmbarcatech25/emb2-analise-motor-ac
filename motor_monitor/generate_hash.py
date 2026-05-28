@@ -1,4 +1,4 @@
-Import("env")
+Import("env") # type: ignore
 import hashlib
 import time
 
@@ -10,6 +10,6 @@ hex_dig = hash_object.hexdigest()
 print(f"Injetando FIRMWARE_HASH_HEX dinâmico: {hex_dig}")
 
 # Add the macro to the build environment
-env.Append(CPPDEFINES=[
+env.Append(CPPDEFINES=[ # type: ignore
   ("FIRMWARE_HASH_HEX", f'\\"{hex_dig}\\"')
 ])

@@ -108,7 +108,7 @@ let appState = {
     vibPeak: 1.45,
     thresholds: {
         vibAlert: 1.5,
-        vibCritical: 3.0,
+        vibCritical: 3,
         tempAlert: 70,
         tempCritical: 85
     }
@@ -197,37 +197,101 @@ function updateChart(vib, temp) {
 }
 
 // =============================================================================
-// Gestão do Mural de Auditoria Blockchain (Tabela UI)
+// Gestão do Mural de Auditoria Blockchain (Web3 Real)
 // =============================================================================
 const BADGE_CLASS_MAP = {
     SHUTDOWN: 'badge-shutdown',
     OVERRIDE: 'badge-override',
-    THRESHOLD_CHANGE: 'badge-threshold'
+    THRESHOLD_CHANGE: 'badge-threshold',
+    BOOT: 'badge-boot'
 };
 
-function addBlockchainAuditRow(eventType, description) {
+// Configurações do Smart Contract
+const CONTRACT_ADDRESS = "0x0000000000000000000000000000000000000000"; // INSIRA O ENDEREÇO AQUI APÓS O DEPLOY NO REMIX
+const CONTRACT_ABI = [
+    "function logEvent(string _eventType, string _description, string _firmwareHash) public",
+    "event EventLogged(uint256 indexed id, uint256 timestamp, string eventType, string firmwareHash, address indexed operator)"
+];
+
+let provider = null;
+let signer = null;
+let contract = null;
+let walletAddress = null;
+
+async function connectWallet() {
+    if (globalThis.ethereum === undefined) {
+        alert('MetaMask não encontrada! Instale a extensão do MetaMask para registrar eventos na Blockchain.');
+        return;
+    }
+
+    try {
+        await globalThis.ethereum.request({ method: 'eth_requestAccounts' });
+        provider = new ethers.providers.Web3Provider(globalThis.ethereum);
+        signer = provider.getSigner();
+        walletAddress = await signer.getAddress();
+
+        contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+
+        const shortAddr = walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
+        document.getElementById('wallet-address-display').innerText = `Conectado: ${shortAddr}`;
+        document.getElementById('wallet-address-display').style.color = '#10b981';
+        document.getElementById('btn-connect-wallet').style.background = '#10b981';
+        document.getElementById('btn-connect-wallet').innerHTML = '<i class="fa-solid fa-link"></i> Web3 Online';
+
+        console.log("Web3 Conectado:", walletAddress);
+    } catch (err) {
+        console.error("Erro ao conectar MetaMask:", err);
+    }
+}
+
+async function addBlockchainAuditRow(eventType, description) {
     const tbody = document.getElementById('ledger-rows');
     const now = new Date();
     const timestampStr = `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
-
-    // Simulação de transação Web3 realista
-    const txHash = '0x' + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
-
-    const tr = document.createElement('tr');
     const badgeClass = BADGE_CLASS_MAP[eventType] ?? 'badge-boot';
-    const txShort = txHash.slice(0, 16);
     const firmShort = FIRMWARE_HASH.length > 15 ? FIRMWARE_HASH.slice(0, 12) : FIRMWARE_HASH;
 
+    let txHash = "Simulação Local";
+    let txShort = "Local...";
+    let txStatusText = "Registrado localmente (Sem Web3)";
+    let isWeb3 = false;
+    let operatorAddr = "0x0000...0000";
+
+    // Se estiver conectado à MetaMask, envia transação de verdade
+    if (signer && contract && CONTRACT_ADDRESS !== "0x0000000000000000000000000000000000000000") {
+        try {
+            console.log(`Web3: Enviando transação para ${eventType}...`);
+            const tx = await contract.logEvent(eventType, description, FIRMWARE_HASH);
+            txHash = tx.hash;
+            txShort = txHash.slice(0, 16) + '...';
+            txStatusText = `Consulta Web3 Explorer:\nTransação enviada para a rede!\nTxHash: ${txHash}`;
+            isWeb3 = true;
+            operatorAddr = walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
+        } catch (err) {
+            console.error("Erro ao registrar no Smart Contract:", err);
+            txHash = "Erro Web3";
+            txShort = "Erro...";
+            txStatusText = "A transação falhou ou foi rejeitada pelo usuário.";
+        }
+    } else if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
+        // Se não tiver Web3 ou endereço não configurado, avisa
+        txHash = "Pendente Deploy";
+        txShort = "Pendente";
+        txStatusText = "O contrato ainda não foi publicado no Remix (endereço zerado).";
+    }
+
+    const tr = document.createElement('tr');
     tr.innerHTML = String.raw`
         <td><strong>${timestampStr}</strong></td>
         <td><span class="event-badge ${badgeClass}">${eventType}</span></td>
         <td>${description}</td>
-        <td class="code-hash-active">0x71C...8B49f</td>
+        <td class="code-hash-active">${operatorAddr}</td>
         <td class="code-hash" title="${FIRMWARE_HASH}">${firmShort}...</td>
-        <td class="code-hash-active"><a href="#" onclick="alert('Consulta de Auditoria Blockchain:\nTransação validada na rede Arbitrum/Polygon Orbit.\nTxHash: ${txHash}'); return false;">${txShort}...</a></td>
+        <td class="code-hash-active ${isWeb3 ? 'tx-success' : ''}">
+            <a href="#" onclick="alert('${txStatusText}'); return false;">${txShort}</a>
+        </td>
     `;
 
-    // Insere no início da tabela para ver o histórico novo primeiro
     tbody.insertBefore(tr, tbody.firstChild);
 }
 
@@ -235,41 +299,41 @@ function addBlockchainAuditRow(eventType, description) {
 // Lógica de Atualização Visual (Renderizador do Estado)
 // =============================================================================
 const STATE_CONFIG = {
-    ARMED:     { cls: 'text-armed',     sub: 'Monitoramento ativo. Relé fechado, motor energizado.',         rearme: true,  shutdown: false, inject: false },
-    ALERT:     { cls: 'text-alert',     sub: 'Fadiga elevada ou aquecimento detectado! Risco moderado.',     rearme: true,  shutdown: false, inject: false },
-    PROTECTED: { cls: 'text-protected', sub: 'DESARME DE SEGURANÇA! Relé aberto devido a violação crítica.', rearme: false, shutdown: true,  inject: true  },
-    COOLDOWN:  { cls: 'text-cooldown',  sub: 'Resfriando carcaça do motor. Travamento mecânico ativo.',      rearme: true,  shutdown: true,  inject: true  },
-    IDLE:      { cls: 'text-idle',      sub: 'Motor desligado manualmente pelo operador.',                   rearme: false, shutdown: true,  inject: true  }
+    ARMED: { cls: 'text-armed', sub: 'Monitoramento ativo. Relé fechado, motor energizado.', rearme: true, shutdown: false, inject: false },
+    ALERT: { cls: 'text-alert', sub: 'Fadiga elevada ou aquecimento detectado! Risco moderado.', rearme: true, shutdown: false, inject: false },
+    PROTECTED: { cls: 'text-protected', sub: 'DESARME DE SEGURANÇA! Relé aberto devido a violação crítica.', rearme: false, shutdown: true, inject: true },
+    COOLDOWN: { cls: 'text-cooldown', sub: 'Resfriando carcaça do motor. Travamento mecânico ativo.', rearme: true, shutdown: true, inject: true },
+    IDLE: { cls: 'text-idle', sub: 'Motor desligado manualmente pelo operador.', rearme: false, shutdown: true, inject: true }
 };
 
 function renderDashboardState() {
-    const valVib      = document.getElementById('val-vib-resultant');
-    const valTemp     = document.getElementById('val-temperature');
-    const valHum      = document.getElementById('val-humidity');
-    const valPeak     = document.getElementById('val-vib-peak');
-    const stateVal    = document.getElementById('motor-state-value');
-    const stateSub    = document.getElementById('motor-state-subtext');
-    const btnRearme   = document.getElementById('btn-rearme');
+    const valVib = document.getElementById('val-vib-resultant');
+    const valTemp = document.getElementById('val-temperature');
+    const valHum = document.getElementById('val-humidity');
+    const valPeak = document.getElementById('val-vib-peak');
+    const stateVal = document.getElementById('motor-state-value');
+    const stateSub = document.getElementById('motor-state-subtext');
+    const btnRearme = document.getElementById('btn-rearme');
     const btnShutdown = document.getElementById('btn-shutdown');
-    const btnInject   = document.getElementById('btn-inject-anomaly');
+    const btnInject = document.getElementById('btn-inject-anomaly');
 
     // Telemetria textual
-    valVib.innerText  = appState.vibResultant.toFixed(2);
+    valVib.innerText = appState.vibResultant.toFixed(2);
     valTemp.innerText = appState.temperature.toFixed(1);
-    valHum.innerText  = appState.humidity.toFixed(1);
+    valHum.innerText = appState.humidity.toFixed(1);
     valPeak.innerText = `${appState.vibPeak.toFixed(2)}g`;
 
     // Limiares
-    document.getElementById('lbl-vib-critical').innerText  = appState.thresholds.vibCritical.toFixed(1);
+    document.getElementById('lbl-vib-critical').innerText = appState.thresholds.vibCritical.toFixed(1);
     document.getElementById('lbl-temp-critical').innerText = appState.thresholds.tempCritical.toFixed(1);
 
     // Barras de progresso
-    const maxVibProgress  = (appState.vibResultant / appState.thresholds.vibCritical) * 100;
-    const progressVibEl   = document.getElementById('progress-vib');
+    const maxVibProgress = (appState.vibResultant / appState.thresholds.vibCritical) * 100;
+    const progressVibEl = document.getElementById('progress-vib');
     progressVibEl.style.width = `${Math.min(maxVibProgress, 100)}%`;
 
     const maxTempProgress = (appState.temperature / appState.thresholds.tempCritical) * 100;
-    const progressTempEl  = document.getElementById('progress-temp');
+    const progressTempEl = document.getElementById('progress-temp');
     progressTempEl.style.width = `${Math.min(maxTempProgress, 100)}%`;
 
     // Ajusta classes de cores das barras
@@ -283,16 +347,16 @@ function renderDashboardState() {
     const cfg = STATE_CONFIG[appState.motorState];
     if (cfg) {
         stateVal.classList.add(cfg.cls);
-        stateSub.innerText       = cfg.sub;
-        btnRearme.disabled       = cfg.rearme;
-        btnShutdown.disabled     = cfg.shutdown;
-        btnInject.disabled       = cfg.inject;
+        stateSub.innerText = cfg.sub;
+        btnRearme.disabled = cfg.rearme;
+        btnShutdown.disabled = cfg.shutdown;
+        btnInject.disabled = cfg.inject;
     }
 }
 
 function getBarClass(value, alertThreshold, criticalThreshold) {
     if (value >= criticalThreshold) return 'progress-bar bar-critical';
-    if (value >= alertThreshold)    return 'progress-bar bar-alert';
+    if (value >= alertThreshold) return 'progress-bar bar-alert';
     return 'progress-bar bar-normal';
 }
 
@@ -304,7 +368,7 @@ let cooldownTimer = 0;
 
 function runCooldownStep() {
     appState.vibResultant = 0.05 + (Math.random() * 0.02);
-    appState.vibPeak      = appState.vibResultant * 1.414;
+    appState.vibPeak = appState.vibResultant * 1.414;
     appState.temperature -= 0.6;
     if (appState.temperature < 45) appState.temperature = 45;
 
@@ -319,7 +383,7 @@ function runCooldownStep() {
 
 function runIdleStep() {
     appState.vibResultant = 0.02 + (Math.random() * 0.01);
-    appState.vibPeak      = appState.vibResultant * 1.4;
+    appState.vibPeak = appState.vibResultant * 1.4;
     appState.temperature -= 0.2;
     if (appState.temperature < 40) appState.temperature = 40;
 }
@@ -383,7 +447,7 @@ function runLocalSimulationStep() {
 
     // Simulação normal (ARMED ou ALERT)
     appState.temperature = 50 + (Math.sin(simTime * 0.05) * 8) + (Math.random() * 0.5);
-    appState.humidity    = 55 + (Math.cos(simTime * 0.02) * 3);
+    appState.humidity = 55 + (Math.cos(simTime * 0.02) * 3);
 
     const baseVib = computeBaseVib();
     appState.vibResultant = baseVib;
@@ -422,9 +486,9 @@ function connectMQTT() {
     if (isSimulationActive) return;
 
     const clientId = `kiira_dash_${Math.random().toString(16).slice(2, 10)}`;
-    const host     = 'broker.hivemq.com';
-    const isHttps  = globalThis.location.protocol === 'https:';
-    const port     = isHttps ? 8884 : 8000;
+    const host = 'broker.hivemq.com';
+    const isHttps = globalThis.location.protocol === 'https:';
+    const port = isHttps ? 8884 : 8000;
 
     console.log(`MQTT: Conectando a ${host}:${port} (SSL: ${isHttps})...`);
 
@@ -480,7 +544,7 @@ function resolveMotorStateFromJson(state) {
 function onMessageArrived(message) {
     if (isSimulationActive) return;
 
-    const topic   = message.destinationName;
+    const topic = message.destinationName;
     const payload = message.payloadString;
     console.log(`MQTT [REC]: ${topic} -> ${payload}`);
 
@@ -489,8 +553,8 @@ function onMessageArrived(message) {
 
         if (topic === TOPICS.telemetry) {
             appState.vibResultant = json.vib_rms_g;
-            appState.temperature  = json.temp_c;
-            appState.motorState   = resolveMotorStateFromJson(json.state);
+            appState.temperature = json.temp_c;
+            appState.motorState = resolveMotorStateFromJson(json.state);
             updateChart(appState.vibResultant, appState.temperature);
             renderDashboardState();
         } else if (topic === TOPICS.status) {
@@ -541,7 +605,7 @@ function publishMQTTCommand(action, value = '', duration = 0) {
     }
 
     const commandId = `cmd_${Math.random().toString(36).slice(2, 11)}`;
-    const payload   = JSON.stringify({
+    const payload = JSON.stringify({
         command_id: commandId,
         action,
         value,
@@ -559,28 +623,28 @@ function publishMQTTCommand(action, value = '', duration = 0) {
 // ASSOCIAÇÃO DE BOTÕES E EVENTOS DA INTERFACE (UI)
 // =============================================================================
 
-document.getElementById('sim-mode-checkbox').addEventListener('change', function(e) {
+document.getElementById('sim-mode-checkbox').addEventListener('change', function (e) {
     setSimulationMode(e.target.checked);
 });
 
-document.getElementById('btn-rearme').addEventListener('click', function() {
+document.getElementById('btn-rearme').addEventListener('click', function () {
     publishMQTTCommand('SET_MOTOR_STATE', 'ON');
 });
 
-document.getElementById('btn-shutdown').addEventListener('click', function() {
+document.getElementById('btn-shutdown').addEventListener('click', function () {
     publishMQTTCommand('SET_MOTOR_STATE', 'OFF');
 });
 
-document.getElementById('btn-inject-anomaly').addEventListener('click', function() {
+document.getElementById('btn-inject-anomaly').addEventListener('click', function () {
     publishMQTTCommand('INJECT_ANOMALY');
 });
 
-document.getElementById('thresholds-form').addEventListener('submit', function(e) {
+document.getElementById('thresholds-form').addEventListener('submit', function (e) {
     e.preventDefault();
 
-    const vibAlert    = Number.parseFloat(document.getElementById('input-vib-alert').value);
+    const vibAlert = Number.parseFloat(document.getElementById('input-vib-alert').value);
     const vibCritical = Number.parseFloat(document.getElementById('input-vib-critical').value);
-    const tempAlert   = Number.parseFloat(document.getElementById('input-temp-alert').value);
+    const tempAlert = Number.parseFloat(document.getElementById('input-temp-alert').value);
     const tempCritical = Number.parseFloat(document.getElementById('input-temp-critical').value);
 
     appState.thresholds = { vibAlert, vibCritical, tempAlert, tempCritical };
@@ -590,10 +654,10 @@ document.getElementById('thresholds-form').addEventListener('submit', function(e
     if (!isSimulationActive && mqttClient?.isConnected()) {
         const payload = JSON.stringify({
             thresholds: {
-                temp_alert_c:    tempAlert,
+                temp_alert_c: tempAlert,
                 temp_critical_c: tempCritical,
-                vib_alert_g:     vibAlert,
-                vib_critical_g:  vibCritical
+                vib_alert_g: vibAlert,
+                vib_critical_g: vibCritical
             }
         });
         const message = new Paho.MQTT.Message(payload);
@@ -611,13 +675,30 @@ document.getElementById('thresholds-form').addEventListener('submit', function(e
 // =============================================================================
 // EXECUÇÃO INICIAL
 // =============================================================================
-globalThis.addEventListener('load', function() {
+globalThis.addEventListener('load', function () {
     const btnReport = document.getElementById('btn-report');
-    btnReport?.addEventListener('click', function() {
+    btnReport?.addEventListener('click', function () {
         globalThis.print();
     });
+
+    // Conexão Web3 MetaMask
+    const btnWallet = document.getElementById('btn-connect-wallet');
+    btnWallet?.addEventListener('click', connectWallet);
 
     renderDashboardState();
     addBlockchainAuditRow('BOOT', 'Dispositivo inicializado, integridade do firmware validada.');
     connectMQTT();
+});
+const btnReport = document.getElementById('btn-report');
+btnReport?.addEventListener('click', function () {
+    globalThis.print();
+});
+
+// Conexão Web3 MetaMask
+const btnWallet = document.getElementById('btn-connect-wallet');
+btnWallet?.addEventListener('click', connectWallet);
+
+renderDashboardState();
+addBlockchainAuditRow('BOOT', 'Dispositivo inicializado, integridade do firmware validada.');
+connectMQTT();
 });

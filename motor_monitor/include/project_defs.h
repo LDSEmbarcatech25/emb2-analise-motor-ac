@@ -32,6 +32,8 @@ extern "C" {
 
 #define PIN_BTN_RESET       4
 #define PIN_BTN_SILENCE     5
+#define PIN_BTN_DOWN        45  // Navegação OLED: desce/troca página
+#define PIN_BTN_SELECT      46  // Navegação OLED: seleciona ação
 
 // =============================================================================
 // Limiares de Alerta e Proteção do Motor AC

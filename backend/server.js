@@ -3,15 +3,16 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
-const path = require('path');
+const path = require('node:path');
 require('dotenv').config();
 
 const app = express();
+app.disable('x-powered-by');
 const prisma = new PrismaClient({});
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
-app.use(cors());
+app.use(cors({ origin: process.env.FRONTEND_URL || '*' })); // Restrito para segurança via env
 app.use(express.json());
 
 // Serve o dashboard estático em desenvolvimento local
