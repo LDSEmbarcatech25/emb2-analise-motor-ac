@@ -80,20 +80,43 @@ static esp_err_t hdc1080_read(hdc1080_data_t *out)
 
 // ─── MPU6050 ─────────────────────────────────────────────────────────────────
 
+// static esp_err_t mpu6050_read(mpu6050_data_t *out)
+// {
+//     uint8_t raw[14];
+//     // Lê 14 bytes a partir de 0x3B: ACCEL XYZ + TEMP + GYRO XYZ
+//     ESP_ERROR_CHECK(i2c_read_reg(MPU6050_ADDR, 0x3B, raw, 14));
+
+//     // Aceleração: sensibilidade 16384 LSB/g (±2g)
+//     out->ax = (int16_t)(raw[0]  << 8 | raw[1])  / 16384.0f;
+//     out->ay = (int16_t)(raw[2]  << 8 | raw[3])  / 16384.0f;
+//     out->az = (int16_t)(raw[4]  << 8 | raw[5])  / 16384.0f;
+
+//     // raw[6..7] = temperatura interna (ignorada aqui, usamos HDC1080)
+
+//     // Giroscópio: sensibilidade 131 LSB/(°/s) (±250°/s)
+//     out->gx = (int16_t)(raw[8]  << 8 | raw[9])  / 131.0f;
+//     out->gy = (int16_t)(raw[10] << 8 | raw[11]) / 131.0f;
+//     out->gz = (int16_t)(raw[12] << 8 | raw[13]) / 131.0f;
+
+//     return ESP_OK;
+// }
+
 static esp_err_t mpu6050_read(mpu6050_data_t *out)
 {
     uint8_t raw[14];
-    // Lê 14 bytes a partir de 0x3B: ACCEL XYZ + TEMP + GYRO XYZ
+    // Lê 14 bytes a partir de 0x3B: ACCEL_XYZ (6b) + TEMP (2b) + GYRO_XYZ (6b)
     ESP_ERROR_CHECK(i2c_read_reg(MPU6050_ADDR, 0x3B, raw, 14));
 
-    // Aceleração: sensibilidade 16384 LSB/g (±2g)
-    out->ax = (int16_t)(raw[0]  << 8 | raw[1])  / 16384.0f;
-    out->ay = (int16_t)(raw[2]  << 8 | raw[3])  / 16384.0f;
-    out->az = (int16_t)(raw[4]  << 8 | raw[5])  / 16384.0f;
+    // ─── Aceleração (Sensibilidade: ±2g -> 16384 LSB/g) ─────────────────────
+    out->ax = (int16_t)(raw[0] << 8 | raw[1]) / 16384.0f;
+    out->ay = (int16_t)(raw[2] << 8 | raw[3]) / 16384.0f;
+    out->az = (int16_t)(raw[4] << 8 | raw[5]) / 16384.0f;
 
-    // raw[6..7] = temperatura interna (ignorada aqui, usamos HDC1080)
+    // ─── Temperatura Interna (Fórmula oficial do Datasheet) ──────────────────
+    int16_t raw_temp = (int16_t)(raw[6] << 8 | raw[7]);
+    out->temperature_c = (raw_temp / 340.0f) + 36.53f;
 
-    // Giroscópio: sensibilidade 131 LSB/(°/s) (±250°/s)
+    // ─── Giroscópio / Rotação (Sensibilidade: ±250°/s -> 131 LSB/°/s) ────────
     out->gx = (int16_t)(raw[8]  << 8 | raw[9])  / 131.0f;
     out->gy = (int16_t)(raw[10] << 8 | raw[11]) / 131.0f;
     out->gz = (int16_t)(raw[12] << 8 | raw[13]) / 131.0f;
@@ -110,3 +133,15 @@ esp_err_t sensors_read_all(sensor_data_t *out)
     r |= mpu6050_read(&out->imu);
     return r;
 }
+
+// ─── Leitura unificada (Modificada para Teste Isolado) ────────────────────────
+
+// esp_err_t sensors_read_all(sensor_data_t *out)
+// {
+//     // Preenche dados zerados fictícios para o HDC no struct, evitando lixo de memória
+//     out->env.temperature_c = 0.0f;
+//     out->env.humidity_pct = 0.0f;
+
+//     // Chama APENAS o MPU6050 que está fisicamente conectado
+//     return mpu6050_read(&out->imu);
+// }

@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kiira Predict - Dashboard de Monitoramento Preditivo de Motores AC</title>
+    <meta name="description" content="Dashboard Industrial Premium para monitoramento preditivo de motores AC e auditoria imutável via Blockchain utilizando a plataforma KIIRA ESP32-S3.">
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" crossorigin="anonymous">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha384-iw3OoTErCYJJB9mCa8LNS2hbsQ7M3C0EpIsO/H5+EGAkPGc6rk+V8i04oW/K5xq0" crossorigin="anonymous">
+    <!-- Chart.js para gráficos em tempo real -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
+    <!-- Eclipse Paho MQTT JavaScript Client para conexão WebSockets -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" type="text/javascript" integrity="sha384-FtgI6XBQHroa6RTQqVE29PsMgDmibchdhIXlikZhRqly3P0ZGnfxior+GiKyxF7/" crossorigin="anonymous"></script>
+    <!-- Ethers.js para Web3 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js" integrity="sha384-Htz1SE4Sl5aitpvFgr2j0sfsGUIuSXI6t8hEyrlQ93zflEF3a29bH2AvkUROUw7J" crossorigin="anonymous"></script>
+    <!-- CSS Customizado -->
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- BARRA LATERAL (HEADER INDUSTRIAL) -->
+        <header class="sidebar-header">
+            <div class="brand-logo">
+                <i class="fa-solid fa-microchip logo-icon"></i>
+                <div class="brand-text">
+                    <h1>KIIRA <span class="accent-text">Predict</span></h1>
+                    <span class="sub-text">Monitoramento Industrial</span>
+                </div>
+            </div>
+
+            <!-- Perfil de Usuário Logado -->
+            <div class="user-profile-container" style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.1);">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 15px;">
+                    <i class="fa-solid fa-user-shield" style="color: var(--accent); font-size: 24px;"></i>
+                    <div style="display: flex; flex-direction: column;">
+                        <span id="user-email-display" style="font-size: 13px; color: var(--text-primary); font-weight: 600;">...</span>
+                        <span id="user-role-display" style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase;">CARREGANDO</span>
+                    </div>
+                </div>
+                <button id="btn-logout" style="width: 100%; padding: 8px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 6px; color: #ff9999; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.3s; display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 10px;" title="Encerrar Sessão">
+                    <i class="fa-solid fa-arrow-right-from-bracket"></i> Desconectar
+                </button>
+                <button id="btn-connect-wallet" style="width: 100%; padding: 8px; background: #b35900; border: none; border-radius: 6px; color: white; font-size: 12px; font-weight: bold; cursor: pointer; display: flex; justify-content: center; align-items: center; gap: 8px;" title="Conectar MetaMask">
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/3/36/MetaMask_Fox.svg" alt="MetaMask Logo" width="16" height="16"> Conectar Web3
+                </button>
+                <div id="wallet-address-display" style="font-size: 10px; color: #8e9bb5; margin-top: 8px; text-align: center; word-break: break-all;">
+                    Carteira não conectada
+                </div>
+            </div>
+
+            <div class="system-status-container">
+                <div class="status-label">CONEXÃO IOT (MQTT)</div>
+                <div id="mqtt-connection-badge" class="status-badge state-disconnected">
+                    <span class="pulse-dot"></span>
+                    <span id="mqtt-status-text">DESCONECTADO</span>
+                </div>
+            </div>
+
+            <div class="control-panel">
+                <h3 class="section-title">Controle Operacional</h3>
+                <div class="operational-actions">
+                    <button id="btn-rearme" class="btn-action btn-rearme-style" disabled>
+                        <i class="fa-solid fa-arrows-spin"></i> Rearmar Motor
+                    </button>
+                    <button id="btn-shutdown" class="btn-action btn-shutdown-style" disabled>
+                        <i class="fa-solid fa-power-off"></i> Parada Manual
+                    </button>
+                    <button id="btn-inject-anomaly" class="btn-action btn-anomaly-style" disabled>
+                        <i class="fa-solid fa-triangle-exclamation"></i> Injetar Anomalia
+                    </button>
+                </div>
+            </div>
+
+            <!-- NOVA ÁREA: RELATÓRIOS E ACOMPANHAMENTO -->
+            <div class="control-panel" style="margin-top: 15px;">
+                <h3 class="section-title">Relatórios & Histórico</h3>
+                <div class="operational-actions">
+                    <button id="btn-report" class="btn-action" style="background: rgba(139, 92, 246, 0.15); border: 1px solid rgba(139, 92, 246, 0.3); color: #c4a9ff;">
+                        <i class="fa-solid fa-file-pdf"></i> Emitir Relatório PDF
+                    </button>
+                </div>
+            </div>
+
+            <div class="simulation-toggle-container">
+                <div class="toggle-text">
+                    <span>Modo Simulação local</span>
+                    <small>Ative para simular dados sem hardware</small>
+                </div>
+                <label class="switch" for="sim-mode-checkbox">
+                    <input type="checkbox" id="sim-mode-checkbox" aria-label="Toggle Simulation Mode">
+                    <span class="slider round"></span>
+                </label>
+            </div>
+
+            <div class="device-info-footer">
+                <div class="info-row">
+                    <span>ID do Dispositivo:</span>
+                    <strong id="device-id-label">motor_ac_compressor_01</strong>
+                </div>
+                <div class="info-row">
+                    <span>Firmware Hash:</span>
+                    <strong id="firmware-hash-display" class="firmware-hash-truncated" title="Aguardando Conexão...">Aguardando...</strong>
+                </div>
+                <div class="info-row">
+                    <span>Residência:</span>
+                    <strong>EmbarcaTech 2026</strong>
+                </div>
+            </div>
+        </header>
+
+        <!-- CONTEÚDO PRINCIPAL (DASHBOARD) -->
+        <main class="main-dashboard">
+            <!-- TOP CARD GRID (TELEMETRIA ATUAL) -->
+            <section class="telemetry-grid">
+                <!-- CARD ESTADO DO MOTOR -->
+                <div class="card card-state" id="card-motor-state">
+                    <div class="card-header">
+                        <span>ESTADO OPERACIONAL</span>
+                        <i class="fa-solid fa-gauge-high"></i>
+                    </div>
+                    <div class="card-body">
+                        <div id="motor-state-value" class="state-indicator text-armed">ARMADO</div>
+                        <p class="state-subtext" id="motor-state-subtext">Monitoramento ativo, relé de comando FECHADO.</p>
+                    </div>
+                    <div class="card-footer">
+                        <span>GPIO Ativo: Pin 47</span>
+                    </div>
+                </div>
+
+                <!-- CARD RESULTANTE DE VIBRAÇÃO (RMS) -->
+                <div class="card" id="card-vibration">
+                    <div class="card-header">
+                        <span>VIBRAÇÃO RESULTANTE (RMS)</span>
+                        <i class="fa-solid fa-wave-square"></i>
+                    </div>
+                    <div class="card-body">
+                        <div class="telemetry-value-unit">
+                            <span id="val-vib-resultant">0.95</span>
+                            <span class="unit">g</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div id="progress-vib" class="progress-bar bar-normal" style="width: 31%;"></div>
+                        </div>
+                    </div>
+                    <div class="card-footer">
+                        <span>Limite Crítico: <strong id="lbl-vib-critical">3.0</strong>g</span>
+                    </div>
+                </div>
+
+                <!-- CARD TEMPERATURA -->
+                <div class="card" id="card-temp">
+                    <div class="card-header">
+                        <span>TEMPERATURA DA CARCAÇA</span>
+                        <i class="fa-solid fa-thermometer-half"></i>
+                    </div>
+                    <div class="card-body">
+                        <div class="telemetry-value-unit">
+                            <span id="val-temperature">58.4</span>
+                            <span class="unit">°C</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div id="progress-temp" class="progress-bar bar-normal" style="width: 68%;"></div>
+                        </div>
+                    </div>
+                    <div class="card-footer">
+                        <span>Limite Crítico: <strong id="lbl-temp-critical">85.0</strong>°C</span>
+                    </div>
+                </div>
+
+                <!-- CARD UMIDADE E PEAK -->
+                <div class="card" id="card-humidity">
+                    <div class="card-header">
+                        <span>DIAGNÓSTICO DO AR</span>
+                        <i class="fa-solid fa-wind"></i>
+                    </div>
+                    <div class="card-body">
+                        <div class="telemetry-value-unit">
+                            <span id="val-humidity">45.2</span>
+                            <span class="unit">% UR</span>
+                        </div>
+                        <div class="diagnostic-sub-metrics">
+                            <span>Vibração de Pico: <strong id="val-vib-peak">1.45g</strong></span>
+                        </div>
+                    </div>
+                    <div class="card-footer">
+                        <span>Sensor DHT22: Pin 36</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SEÇÃO DE GRÁFICOS E LIMIARES -->
+            <section class="charts-and-thresholds">
+                <!-- GRÁFICO HISTÓRICO EM TEMPO REAL -->
+                <div class="chart-container-wrapper">
+                    <h3 class="chart-title"><i class="fa-solid fa-chart-line"></i> Gráfico de Telemetria Industrial em Tempo Real</h3>
+                    <div class="chart-canvas-area">
+                        <canvas id="realtimeChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- AJUSTE DE LIMIARES REMOTO -->
+                <div class="thresholds-editor-card">
+                    <h3 class="chart-title"><i class="fa-solid fa-sliders"></i> Ajuste Remoto de Limiares (MQTT)</h3>
+                    <form id="thresholds-form" class="thresholds-form">
+                        <div class="form-group">
+                            <label for="input-vib-alert">Alerta de Vibração (g):</label>
+                            <input type="number" id="input-vib-alert" step="0.1" value="1.5">
+                        </div>
+                        <div class="form-group">
+                            <label for="input-vib-critical">Crítico de Vibração (g):</label>
+                            <input type="number" id="input-vib-critical" step="0.1" value="3.0">
+                        </div>
+                        <div class="form-group">
+                            <label for="input-temp-alert">Alerta de Temperatura (°C):</label>
+                            <input type="number" id="input-temp-alert" step="1" value="70">
+                        </div>
+                        <div class="form-group">
+                            <label for="input-temp-critical">Crítico de Temperatura (°C):</label>
+                            <input type="number" id="input-temp-critical" step="1" value="85">
+                        </div>
+                        <button type="submit" id="btn-save-thresholds" class="btn-save-thresholds">
+                            <i class="fa-solid fa-paper-plane"></i> Enviar Limiares via MQTT
+                        </button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- BLOCKCHAIN AUDIT LEDGER (AUDITORIA IMUTÁVEL) -->
+            <section class="blockchain-ledger-area">
+                <div class="ledger-header">
+                    <div class="title-with-badge">
+                        <h2><i class="fa-brands fa-ethereum text-purple"></i> Blockchain Audit Ledger</h2>
+                        <span class="ledger-subtitle">Pista de Auditoria Descentralizada Imutável (Smart Contract: Solidity v0.8.20)</span>
+                    </div>
+                    <div class="blockchain-status-badge">
+                        <i class="fa-solid fa-shield-halved"></i>
+                        <span>CONTRATO ATIVO (OFF-CHAIN ➔ ON-CHAIN)</span>
+                    </div>
+                </div>
+
+                <div class="ledger-table-container">
+                    <table class="ledger-table">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Tipo de Evento</th>
+                                <th>Descrição da Ocorrência</th>
+                                <th>Endereço do Operador (Web3)</th>
+                                <th>Hash de Integridade do Firmware (SHA-256)</th>
+                                <th>Transação na Blockchain (TX Hash)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ledger-rows">
+                            <!-- Inserido dinamicamente pelo JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Script Customizado da Aplicação -->
+    <script src="config.js"></script>
+    <script type="module" src="app.js?v=2"></script>
+</body>
+</html>

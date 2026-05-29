@@ -35,7 +35,10 @@
 #define PDM_CLK_GPIO        2
 #define PDM_DATA_GPIO       37
 #define BUZZER_GPIO         3
-#define RELAY_GPIO          47
+
+#define RELAY_1_BIO_GPIO  47  // Bloqueio de Segurança (NC) e Desligamento remoto
+#define RELAY_2_CMD_GPIO  48  // Comando de Pulso para Ligar (NO)
+
 #define BTN_RESET_GPIO      45
 #define BTN_SILENCE_GPIO    46
 

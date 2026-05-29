@@ -17,8 +17,9 @@ typedef struct {
 } hdc1080_data_t;
 
 typedef struct {
-    float ax, ay, az;  // aceleração em g
-    float gx, gy, gz;  // giroscópio em °/s
+    float ax, ay, az;       // aceleração em g
+    float gx, gy, gz;       // giroscópio em °/s
+    float temperature_c;    // temperatura interna do chip (°C)
 } mpu6050_data_t;
 
 typedef struct {
