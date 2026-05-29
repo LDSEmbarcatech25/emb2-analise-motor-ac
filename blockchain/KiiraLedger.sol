@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
+
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title KiiraLedger
- * @dev Smart Contract para auditoria imutável de eventos industriais (motores AC).
+ * @dev Smart Contract for immutable auditing of industrial events (AC motors).
+ * @custom:security-contact admin@kiira.com
  */
-contract KiiraLedger {
-    
+contract KiiraLedger is Ownable, ReentrancyGuard {
     struct AuditEvent {
         uint256 timestamp;
         string eventType;
@@ -15,10 +18,15 @@ contract KiiraLedger {
         address operator;
     }
 
-    // Array que armazena todos os eventos do histórico
-    AuditEvent[] public events;
+    AuditEvent[] private _events;
+    uint256 private _eventCount;
 
-    // Evento emitido na blockchain toda vez que um log é registrado
+    // Otimizações: Índices para consultas eficientes
+    mapping(string => uint256[]) private _firmwareHashToEventIndices;
+    
+    // Extensões: Permissões granulares de operadores
+    mapping(address => bool) private _authorizedOperators;
+
     event EventLogged(
         uint256 indexed id,
         uint256 timestamp,
@@ -27,50 +35,99 @@ contract KiiraLedger {
         address indexed operator
     );
 
+    error KiiraLedger__InvalidIndex(uint256 index, uint256 maxIndex);
+    error KiiraLedger__UnauthorizedOperator();
+    error KiiraLedger__InvalidInput();
+
+    constructor() Ownable(msg.sender) {}
+
+    /*//////////////////////////////////////////////////////////////
+                        ADMIN FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
     /**
-     * @dev Registra um novo evento de anomalia, desarme ou configuração no motor.
-     * @param _eventType Tipo do evento (ex: "SHUTDOWN", "THRESHOLD_CHANGE").
-     * @param _description Descrição detalhada do que ocorreu.
-     * @param _firmwareHash O hash de compilação do firmware operando no momento.
+     * @dev Authorizes an operator (like a specific engineer's wallet or the motor's wallet) to log events.
+     */
+    function authorizeOperator(address _operator) external onlyOwner {
+        _authorizedOperators[_operator] = true;
+    }
+
+    /**
+     * @dev Revokes an operator's authorization.
+     */
+    function revokeOperator(address _operator) external onlyOwner {
+        _authorizedOperators[_operator] = false;
+    }
+
+    /**
+     * @dev Checks if an operator is authorized.
+     */
+    function isAuthorizedOperator(address _operator) external view returns (bool) {
+        return _authorizedOperators[_operator];
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                    USER-FACING STATE-CHANGING FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+    
+    /**
+     * @dev Registers a new event of anomaly, shutdown, or configuration in the motor.
      */
     function logEvent(
-        string memory _eventType,
-        string memory _description,
-        string memory _firmwareHash
-    ) public {
-        AuditEvent memory newEvent = AuditEvent({
-            timestamp: block.timestamp,
-            eventType: _eventType,
-            description: _description,
-            firmwareHash: _firmwareHash,
-            operator: msg.sender
-        });
+        string calldata _eventType,
+        string calldata _description,
+        string calldata _firmwareHash
+    ) external nonReentrant {
+        if (!_authorizedOperators[msg.sender] && msg.sender != owner()) {
+            revert KiiraLedger__UnauthorizedOperator();
+        }
 
-        events.push(newEvent);
+        if (bytes(_eventType).length == 0 || bytes(_firmwareHash).length == 0) {
+            revert KiiraLedger__InvalidInput();
+        }
 
-        uint256 eventId = events.length - 1;
-        emit EventLogged(eventId, block.timestamp, _eventType, _firmwareHash, msg.sender);
+        _events.push(
+            AuditEvent({
+                timestamp: block.timestamp,
+                eventType: _eventType,
+                description: _description,
+                firmwareHash: _firmwareHash,
+                operator: msg.sender
+            })
+        );
+
+        _firmwareHashToEventIndices[_firmwareHash].push(_eventCount);
+
+        emit EventLogged(_eventCount, block.timestamp, _eventType, _firmwareHash, msg.sender);
+        _eventCount++;
     }
 
-    /**
-     * @dev Retorna o número total de eventos registrados.
-     */
-    function getEventsCount() public view returns (uint256) {
-        return events.length;
+    /*//////////////////////////////////////////////////////////////
+                    USER-FACING READ-ONLY FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+    
+    function getEventsCount() external view returns (uint256) {
+        return _eventCount;
     }
 
-    /**
-     * @dev Retorna um evento específico pelo ID.
-     */
-    function getEvent(uint256 _index) public view returns (
+    function getEvent(uint256 _index) external view returns (
         uint256 timestamp,
         string memory eventType,
         string memory description,
         string memory firmwareHash,
         address operator
     ) {
-        require(_index < events.length, "Indice fora dos limites");
-        AuditEvent memory e = events[_index];
+        if (_index >= _eventCount) {
+            revert KiiraLedger__InvalidIndex(_index, _eventCount - 1);
+        }
+        AuditEvent memory e = _events[_index];
         return (e.timestamp, e.eventType, e.description, e.firmwareHash, e.operator);
+    }
+
+    /**
+     * @dev Returns an array of event IDs that match a specific firmware hash.
+     */
+    function getEventsByFirmwareHash(string calldata _firmwareHash) external view returns (uint256[] memory) {
+        return _firmwareHashToEventIndices[_firmwareHash];
     }
 }

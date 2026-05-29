@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include "sensors.h"
 
 // Parâmetros de calibração (ajuste conforme o motor)

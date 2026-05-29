@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "rom/ets_sys.h"
+#include <string.h>
 
 static const char *TAG = "dht22";
 static int s_gpio = -1;

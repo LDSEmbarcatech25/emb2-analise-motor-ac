@@ -101,7 +101,7 @@ esp_err_t pdm_mic_record_to_sd(const char *filepath, uint32_t duration_s)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "Gravando WAV no SD: %s (%d segundos)...", filepath, duration_s);
+    ESP_LOGI(TAG, "Gravando WAV no SD: %s (%d segundos)...", filepath, (int)duration_s);
 
     while (bytes_written_to_sd < total_bytes_to_write) {
         size_t bytes_to_read = CHUNK_SIZE;

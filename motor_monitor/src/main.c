@@ -1,6 +1,6 @@
 #include "driver/gpio.h"
 #include "driver/i2c.h"
-#include "driver/i2s.h" // Compatibilidade estável com PlatformIO (ESP-IDF v4/v5)
+#include "components/pdm_mic.h" // Novo driver I2S PDM V5
 #include "driver/ledc.h"
 #include "driver/sdspi_host.h"
 #include "esp_event.h"
@@ -37,10 +37,10 @@ static SSD1306_t dev;
 // Credenciais de Rede — Altere antes de flashear!
 // =============================================================================
 #ifndef WIFI_SSID
-#define WIFI_SSID "NomeDaRede"
+#define WIFI_SSID "ITSelf"
 #endif
 #ifndef WIFI_PASS
-#define WIFI_PASS "SenhaDaRede"
+#define WIFI_PASS "code2020"
 #endif
 
 #define MQTT_BROKER_URI "mqtt://broker.hivemq.com:1883"
@@ -90,7 +90,6 @@ static void task_audio_record(void *pvParameters);
 static void init_gpios(void);
 static void init_i2c(void);
 static void init_ledc_buzzer(void);
-static void init_i2s_mic(void);
 static void init_sd_card(void);
 static void init_wifi(void);
 static void init_mqtt(void);
@@ -147,15 +146,24 @@ void update_active_thresholds(const motor_thresholds_t *pNew) {
 // =============================================================================
 // Função Auxiliar de Simulação de Auditoria Blockchain
 // =============================================================================
-void register_blockchain_audit_log(const char *event_type,
-                                   const char *description) {
-  ESP_LOGW(TAG, "---------------- [BLOCKCHAIN AUDIT LEDGER] ----------------");
-  ESP_LOGW(TAG, "EVENTO REGISTRADO: %s", event_type);
-  ESP_LOGW(TAG, "DESCRIÇÃO:         %s", description);
-  ESP_LOGW(TAG, "FIRMWARE HASH:     %s", FIRMWARE_HASH_HEX);
-  ESP_LOGW(TAG, "TRANSAÇÃO HASH (TX): 0x%08x... (Registrado com sucesso!)",
-           rand());
-  ESP_LOGW(TAG, "-----------------------------------------------------------");
+void register_blockchain_audit_log(const char *event_type, const char *description) {
+  // Cria o pacote JSON contendo as informações da auditoria
+  char payload[384];
+  snprintf(payload, sizeof(payload),
+           "{\"device_id\":\"%s\",\"event_type\":\"%s\",\"description\":\"%s\",\"firmware_hash\":\"%s\"}",
+           DEVICE_ID, event_type, description, FIRMWARE_HASH_HEX);
+
+  char pub_topic[64];
+  snprintf(pub_topic, sizeof(pub_topic), "motor/%s/audit", DEVICE_ID);
+
+  // Se o MQTT estiver conectado, despacha para a Dashboard assinar via Web3
+  EventBits_t uxBits = xEventGroupGetBits(xSystemEvents);
+  if (uxBits & EVENT_MQTT_CONNECTED) {
+    int msg_id = esp_mqtt_client_publish(s_mqtt_client, pub_topic, payload, 0, 1, 0);
+    ESP_LOGI(TAG, "MQTT [AUDIT] Enviado para Dashboard Web3 (msg_id=%d) -> %s", msg_id, event_type);
+  } else {
+    ESP_LOGW(TAG, "MQTT [AUDIT] Sem rede! Evento local apenas: %s - %s", event_type, description);
+  }
 }
 
 // =============================================================================
@@ -164,7 +172,6 @@ void register_blockchain_audit_log(const char *event_type,
 void app_main(void) {
   ESP_LOGI(TAG, "Inicializando Dispositivo IoT de Monitoramento Preditivo...");
 
-  // Inicialização da partição de flash NVS
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_INVALID_STATE) {
     ESP_ERROR_CHECK(nvs_flash_erase());
@@ -172,60 +179,65 @@ void app_main(void) {
   }
   ESP_ERROR_CHECK(ret);
 
-  // Inicialização de Mutexes e Filas do FreeRTOS
+  // ── BOOT SCREEN ──────────────────────────────────────────
+  init_i2c();
+  i2c_device_add(&dev, I2C_NUM_0, -1, I2C_ADDRESS);
+  ssd1306_init(&dev, 128, 64);
+  ssd1306_clear_screen(&dev, false);
+  ssd1306_contrast(&dev, 0xFF); // <-- Liga o brilho!
+
+  ssd1306_display_text(&dev, 0, "                ", 16, false);
+  ssd1306_display_text(&dev, 1, "    KIIRA v2    ", 16, true);
+  ssd1306_display_text(&dev, 2, "  Iniciando...  ", 16, false);
+  ssd1306_display_text(&dev, 3, "                ", 16, false);
+  ssd1306_display_text(&dev, 4, " [..] WiFi      ", 16, false);
+  ssd1306_display_text(&dev, 5, " [..] SD Card   ", 16, false);
+  ssd1306_display_text(&dev, 6, " [..] Buzzer    ", 16, false);
+  ssd1306_display_text(&dev, 7, " [..] I2S Mic   ", 16, false);
+  vTaskDelay(pdMS_TO_TICKS(400));
+  // ─────────────────────────────────────────────────────────
+
+  // Mutexes e Filas
   xStateMutex = xSemaphoreCreateMutex();
   xThresholdMutex = xSemaphoreCreateMutex();
-  xSensorQueue = xQueueCreate(
-      1, sizeof(sensor_data_t)); // Tamanho 1 exigido por xQueueOverwrite
+  xSensorQueue = xQueueCreate(1, sizeof(sensor_data_t));
   xCommandQueue = xQueueCreate(5, sizeof(mqtt_command_t));
   xSystemEvents = xEventGroupCreate();
 
-  if (xStateMutex == NULL || xThresholdMutex == NULL || xSensorQueue == NULL ||
-      xCommandQueue == NULL || xSystemEvents == NULL) {
-    ESP_LOGE(
-        TAG,
-        "Erro fatal: Recursos do kernel FreeRTOS não puderam ser criados.");
-    return;
+  if (!xStateMutex || !xThresholdMutex || !xSensorQueue || !xCommandQueue || !xSystemEvents) {
+      ESP_LOGE(TAG, "Erro fatal: recursos FreeRTOS nao criados.");
+      return;
   }
 
-  // Inicialização física do Hardware
+  // Hardware — cada init atualiza sua linha no OLED
   init_gpios();
-  init_i2c();
+
   init_ledc_buzzer();
-  init_i2s_mic();
+  ssd1306_display_text(&dev, 6, " [OK] Buzzer    ", 16, false);
+  vTaskDelay(pdMS_TO_TICKS(150));
+
+  pdm_mic_init();
+  ssd1306_display_text(&dev, 7, " [OK] I2S Mic   ", 16, false);
+  vTaskDelay(pdMS_TO_TICKS(150));
+
   init_sd_card();
+  ssd1306_display_text(&dev, 5, " [OK] SD Card   ", 16, false);
+  vTaskDelay(pdMS_TO_TICKS(150));
 
-  // Configura estado inicial padrão (Armado)
   set_system_state(STATE_ARMED);
+  register_blockchain_audit_log(AUDIT_EVENT_BOOT, "Dispositivo inicializado, integridade do firmware validada.");
 
-  // Registro de boot imutável na Blockchain
-  register_blockchain_audit_log(
-      AUDIT_EVENT_BOOT,
-      "Dispositivo inicializado, integridade do firmware validada.");
+  // Tasks
+  ssd1306_display_text(&dev, 2, "  Tasks OK...   ", 16, false);
+  xTaskCreatePinnedToCore(task_sensors,      "task_sensors",      4096, NULL, 5, NULL, 0);
+  xTaskCreatePinnedToCore(task_protection,   "task_protection",   4096, NULL, 6, NULL, 0);
+  xTaskCreatePinnedToCore(task_telemetry,    "task_telemetry",    8192, NULL, 3, NULL, 0);
+  xTaskCreatePinnedToCore(task_display,      "task_display",      4096, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(task_buzzer,       "task_buzzer",       2048, NULL, 4, NULL, 1);
+  xTaskCreatePinnedToCore(task_audio_record, "task_audio_record", 8192, NULL, 5, NULL, 1);
 
-  ESP_LOGI(TAG, "Criando tarefas FreeRTOS...");
-
-  // =============================================================================
-  // Alocação das Tarefas no CORE 0 (Tempo Crítico, Proteção, Sensores e Rede)
-  // Criadas ANTES do Wi-Fi para o display e sensores iniciarem imediatamente
-  // =============================================================================
-  xTaskCreatePinnedToCore(task_sensors, "task_sensors", 4096, NULL, 5, NULL, 0);
-  xTaskCreatePinnedToCore(task_protection, "task_protection", 4096, NULL, 6,
-                          NULL, 0); // Prioridade 6 (Máxima)
-  xTaskCreatePinnedToCore(task_telemetry, "task_telemetry", 8192, NULL, 3, NULL,
-                          0);
-
-  // =============================================================================
-  // Alocação das Tarefas no CORE 1 (Interface OLED, Buzzers e Áudio I2S)
-  // =============================================================================
-  xTaskCreatePinnedToCore(task_display, "task_display", 4096, NULL, 2, NULL, 1);
-  xTaskCreatePinnedToCore(task_buzzer, "task_buzzer", 2048, NULL, 4, NULL, 1);
-  xTaskCreatePinnedToCore(task_audio_record, "task_audio_record", 8192, NULL, 5,
-                          NULL, 1);
-
-  ESP_LOGI(TAG, "Sistema pronto e operacional.");
-
-  // Conectividade em background (não bloqueia mais o boot)
+  // WiFi — vai atualizar o OLED quando conectar
+  ssd1306_display_text(&dev, 4, " [..] WiFi      ", 16, false);
   init_wifi();
   init_mqtt();
 }
@@ -513,22 +525,13 @@ static void task_telemetry(void *pvParameters) {
 static void task_display(void *pvParameters) {
   ESP_LOGI(TAG, "Iniciando Task de Renderização do Display OLED...");
 
-  // O barramento I2C já foi inicializado por init_i2c() no app_main.
-  i2c_device_add(&dev, I2C_NUM_0, -1, I2C_ADDRESS);
-  ssd1306_init(&dev, 128, 64);
+  // O barramento I2C e o OLED já foram inicializados no app_main!
+  // Aguarda 3 segundos para o usuário conseguir ler o checklist de Boot
+  vTaskDelay(pdMS_TO_TICKS(3000));
+  
+  // Limpa o checklist e prepara para assumir o menu principal
   ssd1306_clear_screen(&dev, false);
   ssd1306_contrast(&dev, 0xFF);
-
-  // Splash screen de boot (1.5s)
-  ssd1306_display_text(&dev, 0, "                ", 16, false);
-  ssd1306_display_text(&dev, 1, "     KIIRA      ", 16, true);
-  ssd1306_display_text(&dev, 2, "    PREDICT     ", 16, true);
-  ssd1306_display_text(&dev, 3, "                ", 16, false);
-  ssd1306_display_text(&dev, 4, "  Motor AC v2.0 ", 16, false);
-  ssd1306_display_text(&dev, 5, "  EmbarcaTech26 ", 16, false);
-  ssd1306_display_text(&dev, 6, "                ", 16, false);
-  ssd1306_display_text(&dev, 7, " Inicializando..", 16, false);
-  vTaskDelay(pdMS_TO_TICKS(1500));
 
   sensor_data_t sData = {0};
   motor_thresholds_t sThresh = {0};
@@ -691,7 +694,7 @@ static void task_display(void *pvParameters) {
       snprintf(buf, sizeof(buf), "FW:%.16s", FIRMWARE_HASH_HEX);
       ssd1306_display_text(&dev, 5, buf, strlen(buf), false);
 
-      snprintf(buf, sizeof(buf), "ID:%s", DEVICE_ID);
+      snprintf(buf, sizeof(buf), "ID:%.20s", DEVICE_ID);
       buf[16] = '\0';
       ssd1306_display_text(&dev, 6, buf, strlen(buf), false);
       break;
@@ -749,137 +752,26 @@ static void task_buzzer(void *pvParameters) {
 }
 
 static void task_audio_record(void *pvParameters) {
-  ESP_LOGI(TAG, "Iniciando Task de Processamento Acústico I2S...");
-
-  const size_t audio_buffer_size =
-      32000; // 1 segundo, 16kHz, 16bit (32 KB) — ajustado para RAM disponível
-  uint8_t *audio_buffer = malloc(audio_buffer_size);
-
-  if (audio_buffer == NULL) {
-    ESP_LOGE(TAG,
-             "Erro crítico: Memória esgotada para alocação do buffer I2S.");
-    vTaskDelete(NULL);
-    return;
-  }
+  ESP_LOGI(TAG, "Iniciando Task de Processamento Acústico I2S (V5)...");
 
   while (1) {
-    xEventGroupWaitBits(xSystemEvents, EVENT_TRIGGER_RECORD, pdTRUE, pdTRUE,
-                        portMAX_DELAY);
-
-    ESP_LOGW(TAG,
-             "GRAVAÇÃO: Iniciando captação I2S (5 segundos de áudio bruto)...");
-
-    i2s_start(I2S_NUM_0);
-
-    size_t total_bytes_read = 0;
-    int64_t sum_squares = 0;
-    int samples_count = 0;
-
-    while (total_bytes_read < audio_buffer_size) {
-      size_t chunk_bytes_read = 0;
-      int16_t i2s_chunk[512]; // Bloco de 1 KB (512 amostras de 16 bits)
-      size_t bytes_to_read = sizeof(i2s_chunk);
-      if (audio_buffer_size - total_bytes_read < bytes_to_read) {
-        bytes_to_read = audio_buffer_size - total_bytes_read;
-      }
-
-      // Realiza leitura real DMA do microfone físico I2S
-      esp_err_t err = i2s_read(I2S_NUM_0, i2s_chunk, bytes_to_read,
-                               &chunk_bytes_read, pdMS_TO_TICKS(100));
-
-      // Fallback Dinâmico: Se o sensor físico não estiver fisicamente conectado
-      // ou no simulador
-      if (err != ESP_OK || chunk_bytes_read == 0) {
-        chunk_bytes_read = bytes_to_read;
-        int samples = chunk_bytes_read / sizeof(int16_t);
-        for (int i = 0; i < samples; i++) {
-          float t = (float)(total_bytes_read / 2 + i) / 16000.0f;
-          // Simula a assinatura acústica de um compressor industrial:
-          // Frequência fundamental de 60Hz da rede + harmônico de 180Hz + ruído
-          // mecânico
-          float val = 3800.0f * sinf(2.0f * M_PI * 60.0f * t) +
-                      1200.0f * sinf(2.0f * M_PI * 180.0f * t) +
-                      (float)(rand() % 1000 - 500);
-          i2s_chunk[i] = (int16_t)val;
-        }
-      }
-
-      // Salva no buffer principal de áudio
-      memcpy(audio_buffer + total_bytes_read, i2s_chunk, chunk_bytes_read);
-
-      // Soma dos quadrados das amplitudes para cálculo posterior do RMS
-      int samples = chunk_bytes_read / sizeof(int16_t);
-      for (int i = 0; i < samples; i++) {
-        sum_squares += (int32_t)i2s_chunk[i] * i2s_chunk[i];
-      }
-      samples_count += samples;
-
-      total_bytes_read += chunk_bytes_read;
-      vTaskDelay(pdMS_TO_TICKS(10));
-    }
-
-    i2s_stop(I2S_NUM_0);
-
-    // Cálculo matemático do volume acústico (dB SPL)
-    float rms = 0.0f;
-    float db = 0.0f;
-    if (samples_count > 0) {
-      rms = sqrtf((float)sum_squares / samples_count);
-      if (rms < 1.0f)
-        rms = 1.0f;
-      // 20 * log10(RMS / Ref). Escala calibrada com base na amplitude total de
-      // 16 bits (32767)
-      db = 20.0f * log10f(rms / 32767.0f) +
-           120.0f; // Calibração típica de dB SPL para mic digital
-    }
-
-    ESP_LOGI(TAG, "GRAVAÇÃO: Captura concluída. Total de bytes lidos: %d",
-             total_bytes_read);
-    ESP_LOGW(
-        TAG,
-        "ANÁLISE ACÚSTICA: Amplitude RMS: %.2f | Pressão Sonora: %.1f dB SPL",
-        rms, db);
-
-    // Classificação Preditiva de Saúde Acústica
-    if (db > 80.0f) {
-      ESP_LOGE(TAG,
-               "ALERTA ACÚSTICO CRÍTICO (%.1f dB): Vibração harmônica de "
-               "rolamentos ou cavitação mecânica!",
-               db);
-    } else if (db > 70.0f) {
-      ESP_LOGW(TAG,
-               "AVISO ACÚSTICO (%.1f dB): Atrito mecânico acima do ideal. "
-               "Agendar verificação preventiva.",
-               db);
+    xEventGroupWaitBits(xSystemEvents, EVENT_TRIGGER_RECORD, pdTRUE, pdTRUE, portMAX_DELAY);
+    
+    ESP_LOGW(TAG, "GRAVAÇÃO: Iniciando captação I2S (5 segundos de áudio bruto)...");
+    
+    // Grava 5 segundos de áudio direto para o SD Card no formato WAV usando o componente
+    esp_err_t err = pdm_mic_record_to_sd("/sdcard/audio.wav", 5);
+    
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "GRAVAÇÃO: Áudio salvo com sucesso no SD (/sdcard/audio.wav)");
+        
+        // Simulação do POST (como o Wi-Fi está rodando em outra task, seria só fazer o HTTP Client aqui)
+        ESP_LOGI(TAG, "HTTP_CLIENT: Conectando a https://predictive.factory.com/api/audio/upload ...");
+        ESP_LOGI(TAG, "HTTP_CLIENT: Upload de áudio concluído com sucesso. Status: 200 OK");
     } else {
-      ESP_LOGI(TAG,
-               "DIAGNÓSTICO ACÚSTICO (%.1f dB): Assinatura sonora estável "
-               "dentro da faixa de conformidade.",
-               db);
+        ESP_LOGE(TAG, "Erro na captação ou gravação do áudio: %s", esp_err_to_name(err));
     }
-
-    // Upload acústico simulação HTTP POST
-    ESP_LOGI(TAG, "HTTP_CLIENT: Conectando a "
-                  "https://predictive.factory.com/api/audio/upload ...");
-    ESP_LOGI(
-        TAG,
-        "HTTP_CLIENT [POST]: Enviando multipart/form-data (160 KB WAV)...");
-
-    for (int offset = 0; offset < total_bytes_read; offset += 16384) {
-      size_t chunk_size = (total_bytes_read - offset > 16384)
-                              ? 16384
-                              : (total_bytes_read - offset);
-      ESP_LOGD(TAG, "HTTP_CLIENT: Transmitindo bloco de %d bytes (Offset: %d)",
-               chunk_size, offset);
-      vTaskDelay(pdMS_TO_TICKS(50));
-    }
-
-    ESP_LOGI(
-        TAG,
-        "HTTP_CLIENT: Upload de áudio concluído com sucesso. Status: 200 OK");
   }
-
-  free(audio_buffer);
 }
 
 // =============================================================================
@@ -940,28 +832,6 @@ static void init_ledc_buzzer(void) {
   ledc_channel_config(&ledc_channel);
 }
 
-static void init_i2s_mic(void) {
-  ESP_LOGI(TAG, "Inicializando barramento I2S0...");
-  i2s_config_t i2s_config = {.mode =
-                                 (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-                             .sample_rate = 16000,
-                             .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-                             .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-                             .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-                             .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-                             .dma_buf_count = 8,
-                             .dma_buf_len = 1024,
-                             .use_apll = false};
-
-  i2s_pin_config_t pin_config = {.bck_io_num = PIN_I2S_SCK,
-                                 .ws_io_num = PIN_I2S_WS,
-                                 .data_out_num = I2S_PIN_NO_CHANGE,
-                                 .data_in_num = PIN_I2S_SD};
-
-  i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
-  i2s_set_pin(I2S_NUM_0, &pin_config);
-  i2s_stop(I2S_NUM_0);
-}
 
 static void init_sd_card(void) {
   ESP_LOGI(TAG, "Inicializando barramento SPI para Cartão SD...");
@@ -1026,6 +896,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
     ESP_LOGI(TAG, "Wi-Fi conectado! IP: " IPSTR, IP2STR(&event->ip_info.ip));
     xEventGroupSetBits(xSystemEvents, EVENT_WIFI_CONNECTED);
+    // Atualiza OLED com WiFi OK
+    ssd1306_display_text(&dev, 4, " [OK] WiFi      ", 16, false);
   }
 }
 

@@ -90,7 +90,8 @@ const TOPICS = {
     status: `motor/${DEVICE_ID}/status`,
     cmd: `motor/${DEVICE_ID}/cmd`,
     cmd_response: `motor/${DEVICE_ID}/cmd/response`,
-    thresholds: `motor/${DEVICE_ID}/thresholds`
+    thresholds: `motor/${DEVICE_ID}/thresholds`,
+    audit: `motor/${DEVICE_ID}/audit`
 };
 
 let mqttClient = null;
@@ -207,7 +208,7 @@ const BADGE_CLASS_MAP = {
 };
 
 // Configurações do Smart Contract
-const CONTRACT_ADDRESS = "0x0000000000000000000000000000000000000000"; // INSIRA O ENDEREÇO AQUI APÓS O DEPLOY NO REMIX
+const CONTRACT_ADDRESS = "0x331be5d12B642FD1f25378EC01b0E9ff353f86fc";
 const CONTRACT_ABI = [
     "function logEvent(string _eventType, string _description, string _firmwareHash) public",
     "event EventLogged(uint256 indexed id, uint256 timestamp, string eventType, string firmwareHash, address indexed operator)"
@@ -245,39 +246,33 @@ async function connectWallet() {
 }
 
 async function addBlockchainAuditRow(eventType, description) {
+    // Se não estiver conectado à Web3 ou endereço não configurado, ignora a auditoria
+    if (!signer || !contract || CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
+        console.warn(`[Auditoria] Evento ignorado (Web3 não conectado): ${eventType}`);
+        return;
+    }
+
     const tbody = document.getElementById('ledger-rows');
     const now = new Date();
     const timestampStr = `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
     const badgeClass = BADGE_CLASS_MAP[eventType] ?? 'badge-boot';
     const firmShort = FIRMWARE_HASH.length > 15 ? FIRMWARE_HASH.slice(0, 12) : FIRMWARE_HASH;
 
-    let txHash = "Simulação Local";
-    let txShort = "Local...";
-    let txStatusText = "Registrado localmente (Sem Web3)";
-    let isWeb3 = false;
-    let operatorAddr = "0x0000...0000";
+    let txHash = "";
+    let txShort = "";
+    let txStatusText = "";
+    let operatorAddr = walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
 
-    // Se estiver conectado à MetaMask, envia transação de verdade
-    if (signer && contract && CONTRACT_ADDRESS !== "0x0000000000000000000000000000000000000000") {
-        try {
-            console.log(`Web3: Enviando transação para ${eventType}...`);
-            const tx = await contract.logEvent(eventType, description, FIRMWARE_HASH);
-            txHash = tx.hash;
-            txShort = txHash.slice(0, 16) + '...';
-            txStatusText = `Consulta Web3 Explorer:\nTransação enviada para a rede!\nTxHash: ${txHash}`;
-            isWeb3 = true;
-            operatorAddr = walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
-        } catch (err) {
-            console.error("Erro ao registrar no Smart Contract:", err);
-            txHash = "Erro Web3";
-            txShort = "Erro...";
-            txStatusText = "A transação falhou ou foi rejeitada pelo usuário.";
-        }
-    } else if (CONTRACT_ADDRESS === "0x0000000000000000000000000000000000000000") {
-        // Se não tiver Web3 ou endereço não configurado, avisa
-        txHash = "Pendente Deploy";
-        txShort = "Pendente";
-        txStatusText = "O contrato ainda não foi publicado no Remix (endereço zerado).";
+    try {
+        console.log(`Web3: Enviando transação para ${eventType}...`);
+        const tx = await contract.logEvent(eventType, description, FIRMWARE_HASH);
+        txHash = tx.hash;
+        txShort = txHash.slice(0, 16) + '...';
+        txStatusText = `Consulta Web3 Explorer:\nTransação enviada para a rede!\nTxHash: ${txHash}`;
+    } catch (err) {
+        console.error("Erro ao registrar no Smart Contract:", err);
+        alert("A transação falhou ou foi rejeitada pelo usuário.");
+        return;
     }
 
     const tr = document.createElement('tr');
@@ -287,7 +282,7 @@ async function addBlockchainAuditRow(eventType, description) {
         <td>${description}</td>
         <td class="code-hash-active">${operatorAddr}</td>
         <td class="code-hash" title="${FIRMWARE_HASH}">${firmShort}...</td>
-        <td class="code-hash-active ${isWeb3 ? 'tx-success' : ''}">
+        <td class="code-hash-active tx-success">
             <a href="#" onclick="alert('${txStatusText}'); return false;">${txShort}</a>
         </td>
     `;
@@ -514,6 +509,7 @@ function onConnectSuccess() {
     mqttClient.subscribe(TOPICS.telemetry);
     mqttClient.subscribe(TOPICS.status);
     mqttClient.subscribe(TOPICS.cmd_response);
+    mqttClient.subscribe(TOPICS.audit);
 
     addBlockchainAuditRow('BOOT', 'Gateway IoT Node-RED ativo. Sessão MQTT sincronizada.');
 }
@@ -576,6 +572,8 @@ function onMessageArrived(message) {
             }
         } else if (topic === TOPICS.cmd_response) {
             console.log(`Handshake de Comando Confirmado: ID ${json.command_id} -> ${json.status}`);
+        } else if (topic === TOPICS.audit) {
+            addBlockchainAuditRow(json.event_type, json.description);
         }
     } catch (e) {
         console.error('Erro ao fazer parse do payload JSON MQTT: ', e);
@@ -689,16 +687,4 @@ globalThis.addEventListener('load', function () {
     addBlockchainAuditRow('BOOT', 'Dispositivo inicializado, integridade do firmware validada.');
     connectMQTT();
 });
-const btnReport = document.getElementById('btn-report');
-btnReport?.addEventListener('click', function () {
-    globalThis.print();
-});
 
-// Conexão Web3 MetaMask
-const btnWallet = document.getElementById('btn-connect-wallet');
-btnWallet?.addEventListener('click', connectWallet);
-
-renderDashboardState();
-addBlockchainAuditRow('BOOT', 'Dispositivo inicializado, integridade do firmware validada.');
-connectMQTT();
-});
