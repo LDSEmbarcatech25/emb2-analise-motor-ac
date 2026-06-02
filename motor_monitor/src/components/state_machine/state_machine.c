@@ -14,7 +14,7 @@
 static const char *TAG = "STATE_MACHINE";
 
 // Estado interno do módulo
-static motor_state_t eCurrentState = STATE_ARMED;
+static motor_state_t eCurrentState = STATE_IDLE;
 static motor_thresholds_t sCurrentThresholds = {
     .temp_alert    = TEMP_THRESHOLD_ALERT,
     .temp_critical = TEMP_THRESHOLD_CRITICAL,

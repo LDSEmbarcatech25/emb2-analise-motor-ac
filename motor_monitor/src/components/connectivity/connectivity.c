@@ -121,7 +121,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT &&
                event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "Wi-Fi desconectado. Tentando reconectar...");
+        wifi_event_sta_disconnected_t *evt = (wifi_event_sta_disconnected_t *)event_data;
+        ESP_LOGW(TAG, "Wi-Fi desconectado (Razao: %d). Tentando reconectar...", evt->reason);
         xEventGroupClearBits(xSystemEvents, EVENT_WIFI_CONNECTED);
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
@@ -135,6 +136,40 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             ssd1306_display_text(pDev, 4, " [OK] WiFi      ", 16, false);
         }
     }
+}
+
+static void wifi_scan_task(void *pvParameters) {
+    ESP_LOGI(TAG, "Iniciando escaneamento de redes Wi-Fi na Task...");
+    wifi_scan_config_t scan_config = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = false,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+    };
+    
+    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+    if (err == ESP_OK) {
+        uint16_t number = 20;
+        wifi_ap_record_t ap_info[20];
+        uint16_t ap_count = 0;
+        esp_wifi_scan_get_ap_num(&ap_count);
+        if (ap_count > 0) {
+            if (ap_count > number) ap_count = number;
+            esp_wifi_scan_get_ap_records(&ap_count, ap_info);
+            ESP_LOGI(TAG, "Encontradas %d redes Wi-Fi em alcance:", ap_count);
+            for (int i = 0; i < ap_count; i++) {
+                ESP_LOGI(TAG, "  [%d] SSID: %-20.20s | RSSI: %d dBm | Canal: %d", 
+                         i + 1, (char *)ap_info[i].ssid, ap_info[i].rssi, ap_info[i].primary);
+            }
+        } else {
+            ESP_LOGW(TAG, "Nenhuma rede Wi-Fi encontrada em alcance.");
+        }
+    } else {
+        ESP_LOGE(TAG, "Falha ao iniciar escaneamento Wi-Fi: %d", err);
+    }
+    
+    vTaskDelete(NULL);
 }
 
 void init_wifi(void) {
@@ -155,13 +190,17 @@ void init_wifi(void) {
         .sta = {
             .ssid = WIFI_SSID,
             .password = WIFI_PASS,
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            .threshold.authmode = WIFI_AUTH_OPEN,
         },
     };
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "Aguardando conexão Wi-Fi (SSID: %s)...", WIFI_SSID);
+    
+    // Executa escaneamento de redes visíveis no boot usando uma task dedicada para evitar stack overflow na main task
+    xTaskCreatePinnedToCore(wifi_scan_task, "wifi_scan_task", 4096, NULL, 5, NULL, 0);
+    
+    ESP_LOGI(TAG, "Aguardando conexao Wi-Fi (SSID: %s)...", WIFI_SSID);
 }
 
 // =============================================================================

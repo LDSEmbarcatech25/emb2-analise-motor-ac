@@ -11,6 +11,7 @@
 #include "project_defs.h"
 #include "config.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include <math.h>
 #include <stdlib.h>
 
@@ -43,6 +44,10 @@ bool sensors_get_inject_anomaly(void) {
 
 void task_sensors(void *pvParameters) {
     ESP_LOGI(TAG, "Iniciando Task de Leitura de Sensores...");
+    
+    // Inicializa o gerador de números aleatórios usando o TRNG de hardware do ESP32-S3
+    srand(esp_random());
+    
     sensor_data_t sData = {0};
     float t_sim = 0.0f;
     float fAnomalyAccumulator = 0.0f;
@@ -62,8 +67,8 @@ void task_sensors(void *pvParameters) {
             0.40f + (cosf(t_sim * 2.0f) * 0.08f) + ((float)(rand() % 15) / 100.0f);
         sData.accel_z_rms = 0.80f + ((float)(rand() % 40) / 100.0f);
 
-        // Emulações ocasionais de pico de vibração (fadiga de rolamento)
-        if (rand() % 25 == 0) {
+        // Emulações ocasionais de pico de vibração (fadiga de rolamento) - apenas após 5s de boot
+        if (t_sim > 5.0f && rand() % 25 == 0) {
             sData.accel_z_rms += 2.2f; // Pico mecânico severo
             sData.vib_peak = 3.5f;
             sData.temperature += 4.0f; // Acoplamento térmico de atrito
