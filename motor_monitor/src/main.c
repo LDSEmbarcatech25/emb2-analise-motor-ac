@@ -39,6 +39,8 @@ static const char *TAG = "MOTOR_MONITOR";
 QueueHandle_t      xSensorQueue   = NULL;
 QueueHandle_t      xCommandQueue  = NULL;
 EventGroupHandle_t xSystemEvents  = NULL;
+SemaphoreHandle_t  xStateMutex     = NULL;
+SemaphoreHandle_t  xThresholdMutex = NULL;
 
 // =============================================================================
 // Protótipo da task de áudio (mantida no main.c)

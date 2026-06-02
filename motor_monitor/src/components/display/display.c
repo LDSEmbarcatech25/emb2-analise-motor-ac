@@ -29,10 +29,6 @@ static const char *TAG = "DISPLAY";
 // Instância do display OLED (gerenciada exclusivamente por este módulo)
 static SSD1306_t dev;
 
-// Referências externas (criadas no main.c)
-extern EventGroupHandle_t xSystemEvents;
-extern SemaphoreHandle_t  xStateMutex;
-
 // =============================================================================
 // API Pública
 // =============================================================================

@@ -22,14 +22,6 @@ static motor_thresholds_t sCurrentThresholds = {
     .vib_critical  = VIB_THRESHOLD_CRITICAL
 };
 
-// Mutexes gerenciados internamente
-static SemaphoreHandle_t xStateMutex     = NULL;
-static SemaphoreHandle_t xThresholdMutex = NULL;
-
-// Referências externas (criadas no main.c)
-extern QueueHandle_t      xSensorQueue;
-extern EventGroupHandle_t xSystemEvents;
-
 // Declaração externa da função de auditoria (connectivity module)
 extern void register_blockchain_audit_log(const char *event_type, const char *description);
 

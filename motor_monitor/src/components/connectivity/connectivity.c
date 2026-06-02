@@ -34,11 +34,6 @@
 static const char *TAG = "CONNECTIVITY";
 static esp_mqtt_client_handle_t s_mqtt_client = NULL;
 
-// Referências externas (criadas no main.c)
-extern QueueHandle_t      xSensorQueue;
-extern QueueHandle_t      xCommandQueue;
-extern EventGroupHandle_t xSystemEvents;
-
 // Referência ao display para atualizar WiFi status no boot screen
 extern SSD1306_t *display_get_dev(void);
 

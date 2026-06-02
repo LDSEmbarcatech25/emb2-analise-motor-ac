@@ -8,6 +8,7 @@
  */
 
 #include "sensors.h"
+#include "project_defs.h"
 #include "config.h"
 #include "esp_log.h"
 #include <math.h>
@@ -19,11 +20,6 @@ static const char *TAG = "SENSORS";
 static sensor_data_t sLastSensorData = {0};
 static bool bInjectAnomaly = false;
 
-// Referências externas (criadas no main.c)
-extern QueueHandle_t    xSensorQueue;
-extern SemaphoreHandle_t xStateMutex;
-
-// =============================================================================
 // API Pública
 // =============================================================================
 

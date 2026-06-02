@@ -113,6 +113,15 @@ typedef struct {
 #define EVENT_SILENCE_BUZZER      (1 << 3)
 #define EVENT_TRIGGER_RECORD      (1 << 4)
 
+// =============================================================================
+// Compartilhamento Global de Recursos FreeRTOS (Queues, Semaphores, Event Groups)
+// =============================================================================
+extern QueueHandle_t      xSensorQueue;
+extern QueueHandle_t      xCommandQueue;
+extern EventGroupHandle_t xSystemEvents;
+extern SemaphoreHandle_t  xStateMutex;
+extern SemaphoreHandle_t  xThresholdMutex;
+
 #ifdef __cplusplus
 }
 #endif
