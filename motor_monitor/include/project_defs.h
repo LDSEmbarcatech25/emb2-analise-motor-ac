@@ -6,34 +6,11 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/event_groups.h"
+#include "config.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-// =============================================================================
-// Definições de Portas GPIO (ESP32-S3 KIIRA)
-// =============================================================================
-#define PIN_I2C_SDA         14
-#define PIN_I2C_SCL         21
-
-#define PIN_I2S_SCK         2
-#define PIN_I2S_WS          37
-#define PIN_I2S_SD          35
-
-#define PIN_DHT22           36
-#define PIN_RELE            47
-#define PIN_BUZZER          3
-
-#define PIN_SD_CS           38
-#define PIN_SD_SCK          40
-#define PIN_SD_MOSI         39
-#define PIN_SD_MISO         41
-
-#define PIN_BTN_RESET       4
-#define PIN_BTN_SILENCE     5
-#define PIN_BTN_DOWN        45  // Navegação OLED: desce/troca página
-#define PIN_BTN_SELECT      46  // Navegação OLED: seleciona ação
 
 // =============================================================================
 // Limiares de Alerta e Proteção do Motor AC

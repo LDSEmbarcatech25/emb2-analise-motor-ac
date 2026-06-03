@@ -88,10 +88,6 @@ void app_main(void) {
     init_sd_card();
     display_boot_update(5, " [OK] SD Card   ");
 
-    set_system_state(STATE_ARMED);
-    register_blockchain_audit_log(AUDIT_EVENT_BOOT,
-                                  "Dispositivo inicializado, integridade do firmware validada.");
-
     // ── Tasks FreeRTOS ───────────────────────────────────────
     SSD1306_t *pDev = display_get_dev();
     ssd1306_display_text(pDev, 2, "  Tasks OK...   ", 16, false);
@@ -107,6 +103,10 @@ void app_main(void) {
     display_boot_update(4, " [..] WiFi      ");
     init_wifi();
     init_mqtt();
+
+    set_system_state(STATE_ARMED);
+    register_blockchain_audit_log(AUDIT_EVENT_BOOT,
+                                  "Dispositivo inicializado, integridade do firmware validada.");
 }
 
 // =============================================================================

@@ -13,7 +13,6 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include <math.h>
-#include <stdlib.h>
 
 static const char *TAG = "SENSORS";
 
@@ -45,8 +44,8 @@ bool sensors_get_inject_anomaly(void) {
 void task_sensors(void *pvParameters) {
     ESP_LOGI(TAG, "Iniciando Task de Leitura de Sensores...");
     
-    // Inicializa o gerador de números aleatórios usando o TRNG de hardware do ESP32-S3
-    srand(esp_random());
+    // TRNG de hardware do ESP32-S3 — sem necessidade de srand()
+    // esp_random() já é um gerador de números verdadeiramente aleatórios (TRNG)
     
     sensor_data_t sData = {0};
     float t_sim = 0.0f;
@@ -57,18 +56,18 @@ void task_sensors(void *pvParameters) {
 
         // Simulação matemática rica das medições industriais
         sData.temperature =
-            45.0f + (sinf(t_sim * 0.05f) * 10.0f) + ((float)(rand() % 10) / 10.0f);
+            45.0f + (sinf(t_sim * 0.05f) * 10.0f) + ((float)(esp_random() % 10) / 10.0f);
         sData.humidity = 60.0f + (cosf(t_sim * 0.02f) * 5.0f);
 
         // Aceleração RMS harmônica
         sData.accel_x_rms =
-            0.50f + (sinf(t_sim * 2.0f) * 0.10f) + ((float)(rand() % 20) / 100.0f);
+            0.50f + (sinf(t_sim * 2.0f) * 0.10f) + ((float)(esp_random() % 20) / 100.0f);
         sData.accel_y_rms =
-            0.40f + (cosf(t_sim * 2.0f) * 0.08f) + ((float)(rand() % 15) / 100.0f);
-        sData.accel_z_rms = 0.80f + ((float)(rand() % 40) / 100.0f);
+            0.40f + (cosf(t_sim * 2.0f) * 0.08f) + ((float)(esp_random() % 15) / 100.0f);
+        sData.accel_z_rms = 0.80f + ((float)(esp_random() % 40) / 100.0f);
 
         // Emulações ocasionais de pico de vibração (fadiga de rolamento) - apenas após 5s de boot
-        if (t_sim > 5.0f && rand() % 25 == 0) {
+        if (t_sim > 5.0f && esp_random() % 25 == 0) {
             sData.accel_z_rms += 2.2f; // Pico mecânico severo
             sData.vib_peak = 3.5f;
             sData.temperature += 4.0f; // Acoplamento térmico de atrito

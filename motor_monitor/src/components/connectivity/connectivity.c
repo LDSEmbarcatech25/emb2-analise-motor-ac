@@ -14,8 +14,7 @@
 #include "config.h"
 #include "components/state_machine/state_machine.h"
 #include "components/sensors/sensors.h"
-
-#include "driver/sdspi_host.h"
+#include "components/display/display.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -34,8 +33,6 @@
 static const char *TAG = "CONNECTIVITY";
 static esp_mqtt_client_handle_t s_mqtt_client = NULL;
 
-// Referência ao display para atualizar WiFi status no boot screen
-extern SSD1306_t *display_get_dev(void);
 
 // =============================================================================
 // Auditoria Blockchain
@@ -138,40 +135,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
-static void wifi_scan_task(void *pvParameters) {
-    ESP_LOGI(TAG, "Iniciando escaneamento de redes Wi-Fi na Task...");
-    wifi_scan_config_t scan_config = {
-        .ssid = NULL,
-        .bssid = NULL,
-        .channel = 0,
-        .show_hidden = false,
-        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-    };
-    
-    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
-    if (err == ESP_OK) {
-        uint16_t number = 20;
-        wifi_ap_record_t ap_info[20];
-        uint16_t ap_count = 0;
-        esp_wifi_scan_get_ap_num(&ap_count);
-        if (ap_count > 0) {
-            if (ap_count > number) ap_count = number;
-            esp_wifi_scan_get_ap_records(&ap_count, ap_info);
-            ESP_LOGI(TAG, "Encontradas %d redes Wi-Fi em alcance:", ap_count);
-            for (int i = 0; i < ap_count; i++) {
-                ESP_LOGI(TAG, "  [%d] SSID: %-20.20s | RSSI: %d dBm | Canal: %d", 
-                         i + 1, (char *)ap_info[i].ssid, ap_info[i].rssi, ap_info[i].primary);
-            }
-        } else {
-            ESP_LOGW(TAG, "Nenhuma rede Wi-Fi encontrada em alcance.");
-        }
-    } else {
-        ESP_LOGE(TAG, "Falha ao iniciar escaneamento Wi-Fi: %d", err);
-    }
-    
-    vTaskDelete(NULL);
-}
-
 void init_wifi(void) {
     ESP_LOGI(TAG, "Inicializando Wi-Fi...");
     ESP_ERROR_CHECK(esp_netif_init());
@@ -196,9 +159,6 @@ void init_wifi(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
-    
-    // Executa escaneamento de redes visíveis no boot usando uma task dedicada para evitar stack overflow na main task
-    xTaskCreatePinnedToCore(wifi_scan_task, "wifi_scan_task", 4096, NULL, 5, NULL, 0);
     
     ESP_LOGI(TAG, "Aguardando conexao Wi-Fi (SSID: %s)...", WIFI_SSID);
 }
@@ -260,15 +220,21 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
         snprintf(cmd_topic, sizeof(cmd_topic), "motor/%s/cmd", DEVICE_ID);
         if (strcmp(topic, cmd_topic) == 0) {
             mqtt_command_t cmd = {0};
-            char *p;
-            if ((p = strstr(payload, "\"command_id\":\"")) != NULL) {
-                sscanf(p, "\"command_id\":\"%39[^\"]\"", cmd.command_id);
+            const char *p_field;
+            if ((p_field = strstr(payload, "\"command_id\":\"")) != NULL) {
+                if (sscanf(p_field, "\"command_id\":\"%39[^\"]\"", cmd.command_id) != 1) {
+                    ESP_LOGW(TAG, "Falha ao parsear command_id");
+                }
             }
-            if ((p = strstr(payload, "\"action\":\"")) != NULL) {
-                sscanf(p, "\"action\":\"%31[^\"]\"", cmd.action);
+            if ((p_field = strstr(payload, "\"action\":\"")) != NULL) {
+                if (sscanf(p_field, "\"action\":\"%31[^\"]\"", cmd.action) != 1) {
+                    ESP_LOGW(TAG, "Falha ao parsear action");
+                }
             }
-            if ((p = strstr(payload, "\"value\":\"")) != NULL) {
-                sscanf(p, "\"value\":\"%15[^\"]\"", cmd.value);
+            if ((p_field = strstr(payload, "\"value\":\"")) != NULL) {
+                if (sscanf(p_field, "\"value\":\"%15[^\"]\"", cmd.value) != 1) {
+                    ESP_LOGW(TAG, "Falha ao parsear value");
+                }
             }
             if (xQueueSend(xCommandQueue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
                 ESP_LOGW(TAG, "Fila de comandos cheia! Comando descartado.");
@@ -280,15 +246,27 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
         snprintf(thr_topic, sizeof(thr_topic), "motor/%s/thresholds", DEVICE_ID);
         if (strcmp(topic, thr_topic) == 0) {
             motor_thresholds_t new_t = {0};
-            char *p;
-            if ((p = strstr(payload, "\"temp_alert_c\":")) != NULL)
-                sscanf(p, "\"temp_alert_c\":%f", &new_t.temp_alert);
-            if ((p = strstr(payload, "\"temp_critical_c\":")) != NULL)
-                sscanf(p, "\"temp_critical_c\":%f", &new_t.temp_critical);
-            if ((p = strstr(payload, "\"vib_alert_g\":")) != NULL)
-                sscanf(p, "\"vib_alert_g\":%f", &new_t.vib_alert);
-            if ((p = strstr(payload, "\"vib_critical_g\":")) != NULL)
-                sscanf(p, "\"vib_critical_g\":%f", &new_t.vib_critical);
+            const char *p_thr;
+            if ((p_thr = strstr(payload, "\"temp_alert_c\":")) != NULL) {
+                if (sscanf(p_thr, "\"temp_alert_c\":%f", &new_t.temp_alert) != 1) {
+                    ESP_LOGW(TAG, "Falha ao parsear temp_alert_c");
+                }
+            }
+            if ((p_thr = strstr(payload, "\"temp_critical_c\":")) != NULL) {
+                if (sscanf(p_thr, "\"temp_critical_c\":%f", &new_t.temp_critical) != 1) {
+                    ESP_LOGW(TAG, "Falha ao parsear temp_critical_c");
+                }
+            }
+            if ((p_thr = strstr(payload, "\"vib_alert_g\":")) != NULL) {
+                if (sscanf(p_thr, "\"vib_alert_g\":%f", &new_t.vib_alert) != 1) {
+                    ESP_LOGW(TAG, "Falha ao parsear vib_alert_g");
+                }
+            }
+            if ((p_thr = strstr(payload, "\"vib_critical_g\":")) != NULL) {
+                if (sscanf(p_thr, "\"vib_critical_g\":%f", &new_t.vib_critical) != 1) {
+                    ESP_LOGW(TAG, "Falha ao parsear vib_critical_g");
+                }
+            }
             if (new_t.temp_critical > 0 && new_t.vib_critical > 0) {
                 update_active_thresholds(&new_t);
                 register_blockchain_audit_log(

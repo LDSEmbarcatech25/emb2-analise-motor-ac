@@ -6,6 +6,9 @@
 #include <string.h>
 #include <stdio.h> // Necessário para fopen, fwrite, fclose
 
+// Tamanho do bloco de leitura I2S em bytes
+#define PDM_CHUNK_SIZE  4096
+
 static const char *TAG = "pdm_mic";
 static i2s_chan_handle_t s_rx = NULL;
 
@@ -56,7 +59,10 @@ static void write_wav_header(FILE *f, uint32_t total_audio_bytes)
     };
 
     // Escreve os 44 bytes no início do arquivo
-    fwrite(header, 1, 44, f);
+    size_t written = fwrite(header, 1, 44, f);
+    if (written != 44) {
+        ESP_LOGE(TAG, "Erro ao escrever cabecalho WAV (%u/44 bytes)!", (unsigned)written);
+    }
 }
 
 esp_err_t pdm_mic_record(int16_t *buf, size_t buf_bytes, size_t *bytes_written)
@@ -93,10 +99,9 @@ esp_err_t pdm_mic_record_to_sd(const char *filepath, uint32_t duration_s)
     size_t total_bytes_to_write = PDM_SAMPLE_RATE * sizeof(int16_t) * duration_s;
     size_t bytes_written_to_sd = 0;
 
-    #define CHUNK_SIZE 4096
-    uint8_t *temp_buf = (uint8_t *)malloc(CHUNK_SIZE);
+    uint8_t *temp_buf = (uint8_t *)malloc(PDM_CHUNK_SIZE);
     if (temp_buf == NULL) {
-        ESP_LOGE(TAG, "Falha ao alocar buffer temporário na Heap!");
+        ESP_LOGE(TAG, "Falha ao alocar buffer temporario na Heap!");
         fclose(f);
         return ESP_ERR_NO_MEM;
     }
@@ -104,7 +109,7 @@ esp_err_t pdm_mic_record_to_sd(const char *filepath, uint32_t duration_s)
     ESP_LOGI(TAG, "Gravando WAV no SD: %s (%d segundos)...", filepath, (int)duration_s);
 
     while (bytes_written_to_sd < total_bytes_to_write) {
-        size_t bytes_to_read = CHUNK_SIZE;
+        size_t bytes_to_read = PDM_CHUNK_SIZE;
         if (bytes_written_to_sd + bytes_to_read > total_bytes_to_write) {
             bytes_to_read = total_bytes_to_write - bytes_written_to_sd;
         }

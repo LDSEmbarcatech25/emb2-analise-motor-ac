@@ -8,6 +8,8 @@
 
 #include "state_machine.h"
 #include "config.h"
+#include "components/connectivity/connectivity.h"
+#include "components/sensors/sensors.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 
@@ -21,12 +23,6 @@ static motor_thresholds_t sCurrentThresholds = {
     .vib_alert     = VIB_THRESHOLD_ALERT,
     .vib_critical  = VIB_THRESHOLD_CRITICAL
 };
-
-// Declaração externa da função de auditoria (connectivity module)
-extern void register_blockchain_audit_log(const char *event_type, const char *description);
-
-// Declaração externa da função de injeção de anomalia (sensors module)
-extern void sensors_inject_anomaly(bool bEnable);
 
 // =============================================================================
 // Inicialização
