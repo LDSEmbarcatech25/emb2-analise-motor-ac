@@ -28,8 +28,9 @@ void init_mqtt(void);
 
 /**
  * @brief Inicializa barramento SPI e monta o cartão SD.
+ * @return true se montado com sucesso, false caso contrário.
  */
-void init_sd_card(void);
+bool init_sd_card(void);
 
 /**
  * @brief Task FreeRTOS de telemetria: envia dados dos sensores via MQTT,

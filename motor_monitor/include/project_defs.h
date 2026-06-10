@@ -89,6 +89,8 @@ typedef struct {
 #define EVENT_ALERT_ACTIVE        (1 << 2)
 #define EVENT_SILENCE_BUZZER      (1 << 3)
 #define EVENT_TRIGGER_RECORD      (1 << 4)
+#define EVENT_TEST_BUZZER         (1 << 5)
+#define EVENT_SD_CARD_OK          (1 << 6)
 
 // =============================================================================
 // Compartilhamento Global de Recursos FreeRTOS (Queues, Semaphores, Event Groups)

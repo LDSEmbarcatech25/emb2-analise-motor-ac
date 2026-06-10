@@ -59,18 +59,19 @@ void task_sensors(void *pvParameters) {
             45.0f + (sinf(t_sim * 0.05f) * 10.0f) + ((float)(esp_random() % 10) / 10.0f);
         sData.humidity = 60.0f + (cosf(t_sim * 0.02f) * 5.0f);
 
-        // Aceleração RMS harmônica
+        // Aceleração RMS harmônica (ajustada para ruído normal não ultrapassar o limiar de alerta de 1.50g)
         sData.accel_x_rms =
             0.50f + (sinf(t_sim * 2.0f) * 0.10f) + ((float)(esp_random() % 20) / 100.0f);
         sData.accel_y_rms =
             0.40f + (cosf(t_sim * 2.0f) * 0.08f) + ((float)(esp_random() % 15) / 100.0f);
-        sData.accel_z_rms = 0.80f + ((float)(esp_random() % 40) / 100.0f);
+        sData.accel_z_rms = 0.70f + ((float)(esp_random() % 30) / 100.0f);
 
-        // Emulações ocasionais de pico de vibração (fadiga de rolamento) - apenas após 5s de boot
-        if (t_sim > 5.0f && esp_random() % 25 == 0) {
+        // Emulações ocasionais de pico de vibração (fadiga de rolamento) - ajustadas para ~10 minutos em média (1200 ciclos de 500ms)
+        if (t_sim > 5.0f && esp_random() % 1200 == 0) {
             sData.accel_z_rms += 2.2f; // Pico mecânico severo
             sData.vib_peak = 3.5f;
             sData.temperature += 4.0f; // Acoplamento térmico de atrito
+            ESP_LOGW(TAG, "SIMULAÇÃO: Gerando pico de fadiga de rolamento automático.");
         } else {
             sData.vib_peak = sData.accel_z_rms * 1.414f;
         }

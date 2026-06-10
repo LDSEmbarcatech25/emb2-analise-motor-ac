@@ -21,6 +21,14 @@
     <link rel="stylesheet" href="index.css">
 </head>
 <body>
+    <!-- BOTÃO FLUTUANTE DE TEMA (CLARO/ESCURO) NO CANTO SUPERIOR DIREITO -->
+    <div class="theme-toggle-container-top">
+        <button id="btn-theme-toggle" class="btn-theme-toggle" title="Alternar Tema Claro/Escuro">
+            <i class="fa-solid fa-sun icon-sun" style="display: none;"></i>
+            <i class="fa-solid fa-moon icon-moon"></i>
+        </button>
+    </div>
+
     <div class="app-container">
         <!-- BARRA LATERAL (HEADER INDUSTRIAL) -->
         <header class="sidebar-header">
@@ -41,7 +49,7 @@
                         <span id="user-role-display" style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase;">CARREGANDO</span>
                     </div>
                 </div>
-                <button id="btn-logout" style="width: 100%; padding: 8px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 6px; color: #ff9999; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.3s; display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 10px;" title="Encerrar Sessão">
+                <button id="btn-logout" style="width: 100%; padding: 8px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 6px; color: #fecaca; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.3s; display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 10px;" title="Encerrar Sessão">
                     <i class="fa-solid fa-arrow-right-from-bracket"></i> Desconectar
                 </button>
                 <button id="btn-connect-wallet" style="width: 100%; padding: 8px; background: #b35900; border: none; border-radius: 6px; color: white; font-size: 12px; font-weight: bold; cursor: pointer; display: flex; justify-content: center; align-items: center; gap: 8px;" title="Conectar MetaMask">
@@ -72,6 +80,15 @@
                     <button id="btn-inject-anomaly" class="btn-action btn-anomaly-style" disabled>
                         <i class="fa-solid fa-triangle-exclamation"></i> Injetar Anomalia
                     </button>
+                    <button id="btn-test-buzzer" class="btn-action" style="color: var(--accent); border-color: rgba(var(--accent-rgb), 0.3);" disabled>
+                        <i class="fa-solid fa-volume-high"></i> Testar Buzzer
+                    </button>
+                    <button id="btn-save-sd" class="btn-action" style="color: var(--state-armed); border-color: rgba(0, 255, 135, 0.3);" disabled>
+                        <i class="fa-solid fa-floppy-disk"></i> Gravar no Cartão SD
+                    </button>
+                    <button id="btn-read-sd" class="btn-action" style="color: var(--state-purple); border-color: rgba(161, 92, 255, 0.3);" disabled>
+                        <i class="fa-solid fa-folder-open"></i> Abrir Dados do SD
+                    </button>
                 </div>
             </div>
 
@@ -79,7 +96,7 @@
             <div class="control-panel" style="margin-top: 15px;">
                 <h3 class="section-title">Relatórios & Histórico</h3>
                 <div class="operational-actions">
-                    <button id="btn-report" class="btn-action" style="background: rgba(139, 92, 246, 0.15); border: 1px solid rgba(139, 92, 246, 0.3); color: #c4a9ff;">
+                    <button id="btn-report" class="btn-action" style="background: rgba(139, 92, 246, 0.15); border: 1px solid rgba(139, 92, 246, 0.3); color: #ede9fe;">
                         <i class="fa-solid fa-file-pdf"></i> Emitir Relatório PDF
                     </button>
                 </div>
@@ -233,7 +250,7 @@
             <section class="blockchain-ledger-area">
                 <div class="ledger-header">
                     <div class="title-with-badge">
-                        <h2><i class="fa-brands fa-ethereum text-purple"></i> Blockchain Audit Ledger</h2>
+                        <h2><i class="fa-brands fa-ethereum text-purple"></i> Registro de Auditoria na Blockchain</h2>
                         <span class="ledger-subtitle">Pista de Auditoria Descentralizada Imutável (Smart Contract: Solidity v0.8.20)</span>
                     </div>
                     <div class="blockchain-status-badge">
@@ -261,6 +278,30 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <!-- MODAL PARA EXIBIR DADOS DO CARTÃO SD -->
+    <div id="sd-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header-container" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+                <h3 style="font-size: 18px; font-weight: 700; color: var(--accent); margin: 0;"><i class="fa-solid fa-file-csv"></i> Logs de Telemetria do Cartão SD</h3>
+                <button id="btn-close-sd-modal" style="background: none; border: none; color: var(--text-secondary); font-size: 20px; cursor: pointer;"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body-container" style="margin: 15px 0; display: flex; flex-direction: column; gap: 10px;">
+                <p style="font-size: 13px; color: var(--text-secondary); margin: 0;">Últimas leituras de telemetria armazenadas fisicamente no Cartão SD da placa ESP32-S3.</p>
+                <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; max-height: 40vh; overflow-y: auto;">
+                    <pre id="sd-data-content" style="font-family: monospace; font-size: 12px; color: #00ff87; text-align: left; white-space: pre-wrap; word-break: break-all; margin: 0;"></pre>
+                </div>
+            </div>
+            <div class="modal-footer-container" style="display: flex; justify-content: flex-end; gap: 12px; border-top: 1px solid var(--border-color); padding-top: 12px;">
+                <button id="btn-download-csv" class="btn-action" style="color: var(--state-armed); border-color: rgba(0, 255, 135, 0.3); padding: 8px 16px;">
+                    <i class="fa-solid fa-download"></i> Baixar CSV
+                </button>
+                <button id="btn-close-sd-modal-ok" class="btn-action" style="padding: 8px 16px;">
+                    Fechar
+                </button>
+            </div>
+        </div>
     </div>
 
     <!-- Script Customizado da Aplicação -->

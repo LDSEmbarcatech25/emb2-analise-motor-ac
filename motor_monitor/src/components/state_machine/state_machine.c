@@ -80,6 +80,11 @@ void set_system_state(motor_state_t eNewState) {
             gpio_set_level(PIN_RELE, 1); // Fecha o relé (Energiza o motor)
             ESP_LOGI(TAG, "SEGURANÇA: Relé fechado. Motor ENERGIZADO.");
         }
+
+        // Limpa o sinalizador de alerta ativo se o motor for desligado/colocado em repouso
+        if (eNewState == STATE_IDLE) {
+            xEventGroupClearBits(xSystemEvents, EVENT_ALERT_ACTIVE);
+        }
     }
     xSemaphoreGive(xStateMutex);
 }
@@ -120,77 +125,78 @@ void task_protection(void *pvParameters) {
     uint32_t cooldown_counter = 0;
 
     while (1) {
-        if (xQueuePeek(xSensorQueue, &sData, pdMS_TO_TICKS(600)) == pdTRUE) {
-            motor_state_t eState = get_system_state();
-            get_active_thresholds(&sThresholds);
+        // Obtém a última leitura de forma thread-safe sem consumir a fila de telemetria
+        sensors_get_last_data(&sData);
+        motor_state_t eState = get_system_state();
+        get_active_thresholds(&sThresholds);
 
-            // Cooldown de Segurança (1 minuto de trava mecânica para resfriamento)
-            if (eState == STATE_COOLDOWN) {
-                cooldown_counter++;
-                if (cooldown_counter >= (COOLDOWN_DURATION_S * 2)) {
-                    ESP_LOGI(TAG, "SEGURANÇA: Cooldown concluído. Rearme permitido.");
-                    set_system_state(STATE_IDLE);
-                    cooldown_counter = 0;
-                    xEventGroupClearBits(xSystemEvents, EVENT_ALERT_ACTIVE);
-                }
-                vTaskDelay(pdMS_TO_TICKS(500));
-                continue;
+        // Cooldown de Segurança (1 minuto de trava mecânica para resfriamento)
+        if (eState == STATE_COOLDOWN) {
+            cooldown_counter++;
+            if (cooldown_counter >= (COOLDOWN_DURATION_S * 2)) {
+                ESP_LOGI(TAG, "SEGURANÇA: Cooldown concluído. Rearme permitido.");
+                set_system_state(STATE_IDLE);
+                cooldown_counter = 0;
+                xEventGroupClearBits(xSystemEvents, EVENT_ALERT_ACTIVE);
             }
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
 
-            // Teste de Limiares Críticos (Abertura do Relé)
-            if (sData.vib_resultant >= sThresholds.vib_critical ||
-                sData.temperature >= sThresholds.temp_critical) {
-                if (eState != STATE_PROTECTED && eState != STATE_COOLDOWN) {
+        // Teste de Limiares Críticos (Abertura do Relé)
+        if (sData.vib_resultant >= sThresholds.vib_critical ||
+            sData.temperature >= sThresholds.temp_critical) {
+            if (eState != STATE_PROTECTED && eState != STATE_COOLDOWN) {
 
-                    char desc[128];
-                    snprintf(desc, sizeof(desc),
-                             "Desarme por limites violados! Vib: %.2fg (Limite: %.2fg), "
-                             "Temp: %.1fC (Limite: %.1fC)",
-                             sData.vib_resultant, sThresholds.vib_critical,
-                             sData.temperature, sThresholds.temp_critical);
+                char desc[128];
+                snprintf(desc, sizeof(desc),
+                         "Desarme por limites violados! Vib: %.2fg (Limite: %.2fg), "
+                         "Temp: %.1fC (Limite: %.1fC)",
+                         sData.vib_resultant, sThresholds.vib_critical,
+                         sData.temperature, sThresholds.temp_critical);
 
-                    ESP_LOGE(TAG, "DESARME CRÍTICO: %s", desc);
+                ESP_LOGE(TAG, "DESARME CRÍTICO: %s", desc);
 
-                    // Transiciona de estado
-                    set_system_state(STATE_PROTECTED);
-                    sensors_inject_anomaly(false);
-                    xEventGroupSetBits(xSystemEvents, EVENT_ALERT_ACTIVE);
+                // Transiciona de estado
+                set_system_state(STATE_PROTECTED);
+                sensors_inject_anomaly(false);
+                xEventGroupSetBits(xSystemEvents, EVENT_ALERT_ACTIVE);
 
-                    // Auditoria Imutável: Eterniza o motivo do desligamento na Blockchain
-                    register_blockchain_audit_log(AUDIT_EVENT_SHUTDOWN, desc);
+                // Auditoria Imutável: Eterniza o motivo do desligamento na Blockchain
+                register_blockchain_audit_log(AUDIT_EVENT_SHUTDOWN, desc);
 
-                    // Entra imediatamente no estado de travamento térmico
-                    set_system_state(STATE_COOLDOWN);
-                    cooldown_counter = 0;
-                }
-            }
-            // Teste de Limiares de Alerta Moderado
-            else if (sData.vib_resultant >= sThresholds.vib_alert ||
-                     sData.temperature >= sThresholds.temp_alert) {
-                if (eState == STATE_ARMED) {
-                    ESP_LOGW(TAG,
-                             "ALERTA: Fadiga mecânica elevada. Vib: %.2fg, Temp: %.1f°C",
-                             sData.vib_resultant, sData.temperature);
-                    set_system_state(STATE_ALERT);
-                    xEventGroupSetBits(xSystemEvents, EVENT_ALERT_ACTIVE);
-                }
-            }
-            // Retorna ao estado normal caso os alarmes cessem
-            else {
-                if (eState == STATE_ALERT) {
-                    set_system_state(STATE_ARMED);
-                    xEventGroupClearBits(xSystemEvents, EVENT_ALERT_ACTIVE);
-                }
-            }
-
-            // Rearme via botão físico local (somente em IDLE)
-            if (gpio_get_level(PIN_BTN_RESET) == 0) {
-                if (eState == STATE_IDLE) {
-                    ESP_LOGI(TAG, "SEGURANÇA: Rearme físico via botão táctil.");
-                    set_system_state(STATE_ARMED);
-                }
+                // Entra imediatamente no estado de travamento térmico
+                set_system_state(STATE_COOLDOWN);
+                cooldown_counter = 0;
             }
         }
+        // Teste de Limiares de Alerta Moderado
+        else if (sData.vib_resultant >= sThresholds.vib_alert ||
+                 sData.temperature >= sThresholds.temp_alert) {
+            if (eState == STATE_ARMED) {
+                ESP_LOGW(TAG,
+                         "ALERTA: Fadiga mecânica elevada. Vib: %.2fg, Temp: %.1f°C",
+                         sData.vib_resultant, sData.temperature);
+                set_system_state(STATE_ALERT);
+                xEventGroupSetBits(xSystemEvents, EVENT_ALERT_ACTIVE);
+            }
+        }
+        // Retorna ao estado normal caso os alarmes cessem
+        else {
+            if (eState == STATE_ALERT) {
+                set_system_state(STATE_ARMED);
+                xEventGroupClearBits(xSystemEvents, EVENT_ALERT_ACTIVE);
+            }
+        }
+
+        // Rearme via botão físico local (somente em IDLE)
+        if (gpio_get_level(PIN_BTN_RESET) == 0) {
+            if (eState == STATE_IDLE) {
+                ESP_LOGI(TAG, "SEGURANÇA: Rearme físico via botão táctil.");
+                set_system_state(STATE_ARMED);
+            }
+        }
+
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }

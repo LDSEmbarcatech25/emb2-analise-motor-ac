@@ -44,6 +44,14 @@ void init_ledc_buzzer(void) {
     ledc_channel_config(&ledc_channel);
 }
 
+void buzzer_test_beep(uint32_t duration_ms) {
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 4000);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    vTaskDelay(pdMS_TO_TICKS(duration_ms));
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
+
 // =============================================================================
 // Task FreeRTOS — Buzzer
 // =============================================================================
@@ -61,7 +69,24 @@ void task_buzzer(void *pvParameters) {
             ESP_LOGW(TAG, "BUZZER: Alarme mutado localmente pelo operador.");
         }
 
-        if ((uxBits & EVENT_ALERT_ACTIVE) && !(uxBits & EVENT_SILENCE_BUZZER)) {
+        // Teste de Buzzer disparado remotamente
+        if (uxBits & EVENT_TEST_BUZZER) {
+            ESP_LOGI(TAG, "TESTE: Comando de teste do buzzer recebido. Emitindo 3 bipes...");
+            for (int i = 0; i < 3; i++) {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 4000);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                vTaskDelay(pdMS_TO_TICKS(150));
+
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                vTaskDelay(pdMS_TO_TICKS(150));
+            }
+            xEventGroupClearBits(xSystemEvents, EVENT_TEST_BUZZER);
+            continue;
+        }
+
+        if ((uxBits & EVENT_ALERT_ACTIVE) && !(uxBits & EVENT_SILENCE_BUZZER) &&
+            (eState == STATE_PROTECTED || eState == STATE_COOLDOWN || eState == STATE_ALERT)) {
             if (eState == STATE_PROTECTED || eState == STATE_COOLDOWN) {
                 ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 4000);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);

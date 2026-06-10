@@ -17,7 +17,8 @@ const applyRbac = (role) => {
         }
     } else if (role === 'viewer') {
         const controlsToHide = [
-            'btn-inject-anomaly', 'btn-rearm', 'btn-force-stop', 'btn-start-simulation'
+            'btn-inject-anomaly', 'btn-rearm', 'btn-force-stop', 'btn-start-simulation',
+            'btn-rearme', 'btn-shutdown', 'btn-test-buzzer', 'btn-save-sd', 'btn-read-sd'
         ];
         controlsToHide.forEach(id => {
             const el = document.getElementById(id);
@@ -91,13 +92,16 @@ const TOPICS = {
     cmd: `motor/${DEVICE_ID}/cmd`,
     cmd_response: `motor/${DEVICE_ID}/cmd/response`,
     thresholds: `motor/${DEVICE_ID}/thresholds`,
-    audit: `motor/${DEVICE_ID}/audit`
+    audit: `motor/${DEVICE_ID}/audit`,
+    sd_data: `motor/${DEVICE_ID}/sd_data`
 };
 
 let mqttClient = null;
 let simulationInterval = null;
 let isSimulationActive = false;
 let isSimulatedAnomalyActive = false;
+let lastGetSdDataCmdId = null;
+let sdReadTimeout = null;
 
 // Estado atual simulado ou recebido
 let appState = {
@@ -294,11 +298,11 @@ async function addBlockchainAuditRow(eventType, description) {
 // Lógica de Atualização Visual (Renderizador do Estado)
 // =============================================================================
 const STATE_CONFIG = {
-    ARMED: { cls: 'text-armed', sub: 'Monitoramento ativo. Relé fechado, motor energizado.', rearme: true, shutdown: false, inject: false },
-    ALERT: { cls: 'text-alert', sub: 'Fadiga elevada ou aquecimento detectado! Risco moderado.', rearme: true, shutdown: false, inject: false },
-    PROTECTED: { cls: 'text-protected', sub: 'DESARME DE SEGURANÇA! Relé aberto devido a violação crítica.', rearme: false, shutdown: true, inject: true },
-    COOLDOWN: { cls: 'text-cooldown', sub: 'Resfriando carcaça do motor. Travamento mecânico ativo.', rearme: true, shutdown: true, inject: true },
-    IDLE: { cls: 'text-idle', sub: 'Motor desligado manualmente pelo operador.', rearme: false, shutdown: true, inject: true }
+    ARMED: { cls: 'text-armed', sub: 'Monitoramento ativo. Relé fechado, motor energizado.', rearme: true, shutdown: false, inject: false, testBuzzer: false, saveSd: false, readSd: false },
+    ALERT: { cls: 'text-alert', sub: 'Fadiga elevada ou aquecimento detectado! Risco moderado.', rearme: true, shutdown: false, inject: false, testBuzzer: false, saveSd: false, readSd: false },
+    PROTECTED: { cls: 'text-protected', sub: 'DESARME DE SEGURANÇA! Relé aberto devido a violação crítica.', rearme: false, shutdown: true, inject: true, testBuzzer: true, saveSd: false, readSd: false },
+    COOLDOWN: { cls: 'text-cooldown', sub: 'Resfriando carcaça do motor. Travamento mecânico ativo.', rearme: true, shutdown: true, inject: true, testBuzzer: true, saveSd: false, readSd: false },
+    IDLE: { cls: 'text-idle', sub: 'Motor desligado manualmente pelo operador.', rearme: false, shutdown: true, inject: true, testBuzzer: false, saveSd: false, readSd: false }
 };
 
 function renderDashboardState() {
@@ -311,6 +315,9 @@ function renderDashboardState() {
     const btnRearme = document.getElementById('btn-rearme');
     const btnShutdown = document.getElementById('btn-shutdown');
     const btnInject = document.getElementById('btn-inject-anomaly');
+    const btnTestBuzzer = document.getElementById('btn-test-buzzer');
+    const btnSaveSd = document.getElementById('btn-save-sd');
+    const btnReadSd = document.getElementById('btn-read-sd');
 
     // Telemetria textual
     valVib.innerText = appState.vibResultant.toFixed(2);
@@ -346,6 +353,9 @@ function renderDashboardState() {
         btnRearme.disabled = cfg.rearme;
         btnShutdown.disabled = cfg.shutdown;
         btnInject.disabled = cfg.inject;
+        if (btnTestBuzzer) btnTestBuzzer.disabled = cfg.testBuzzer;
+        if (btnSaveSd) btnSaveSd.disabled = cfg.saveSd;
+        if (btnReadSd) btnReadSd.disabled = cfg.readSd;
     }
 }
 
@@ -482,10 +492,11 @@ function connectMQTT() {
 
     const clientId = `kiira_dash_${Math.random().toString(16).slice(2, 10)}`;
     const host = 'broker.hivemq.com';
-    const isHttps = globalThis.location.protocol === 'https:';
-    const port = isHttps ? 8884 : 8000;
+    // Forçamos o uso de WebSockets Seguros (WSS - Porta 8884) para garantir máxima compatibilidade
+    // em navegadores modernos e evitar bloqueios de portas por firewalls locais
+    const port = 8884;
 
-    console.log(`MQTT: Conectando a ${host}:${port} (SSL: ${isHttps})...`);
+    console.log(`MQTT: Conectando a ${host}:${port} (SSL: true)...`);
 
     mqttClient = new Paho.MQTT.Client(host, Number(port), clientId);
     mqttClient.onConnectionLost = onConnectionLost;
@@ -494,7 +505,7 @@ function connectMQTT() {
     mqttClient.connect({
         onSuccess: onConnectSuccess,
         onFailure: onConnectFailure,
-        useSSL: isHttps,
+        useSSL: true,
         keepAliveInterval: 30
     });
 }
@@ -510,6 +521,7 @@ function onConnectSuccess() {
     mqttClient.subscribe(TOPICS.status);
     mqttClient.subscribe(TOPICS.cmd_response);
     mqttClient.subscribe(TOPICS.audit);
+    mqttClient.subscribe(TOPICS.sd_data);
 
     addBlockchainAuditRow('BOOT', 'Gateway IoT Node-RED ativo. Sessão MQTT sincronizada.');
 }
@@ -537,6 +549,40 @@ function resolveMotorStateFromJson(state) {
     return 'IDLE';
 }
 
+function handleTelemetry(json) {
+    appState.vibResultant = json.vib_rms_g;
+    appState.temperature = json.temp_c;
+    appState.motorState = resolveMotorStateFromJson(json.state);
+    updateChart(appState.vibResultant, appState.temperature);
+    renderDashboardState();
+}
+
+function handleStatus(json) {
+    if (json.firmware_hash) {
+        FIRMWARE_HASH = json.firmware_hash;
+        const hashEl = document.getElementById('firmware-hash-display');
+        if (hashEl) {
+            hashEl.title = FIRMWARE_HASH;
+            hashEl.textContent = FIRMWARE_HASH.slice(0, 8) + '...';
+        }
+    }
+
+    if (json.alert) {
+        appState.motorState = 'PROTECTED';
+        addBlockchainAuditRow('SHUTDOWN', `DESARME CRÍTICO! Causa: ${json.alert.cause} (Medido: ${json.alert.measured_value.toFixed(2)})`);
+        renderDashboardState();
+    } else if (json.connection) {
+        console.log('Status de Conectividade do Dispositivo recebida.');
+    }
+}
+
+function handleCmdResponse(json) {
+    console.log(`Handshake de Comando Confirmado: ID ${json.command_id} -> ${json.status}`);
+    if (json.command_id === lastGetSdDataCmdId && json.status === 'ERROR') {
+        displaySdData(`Erro ao carregar logs do Cartão SD: ${json.error || 'Erro desconhecido'}`);
+    }
+}
+
 function onMessageArrived(message) {
     if (isSimulationActive) return;
 
@@ -544,36 +590,29 @@ function onMessageArrived(message) {
     const payload = message.payloadString;
     console.log(`MQTT [REC]: ${topic} -> ${payload}`);
 
+    if (topic === TOPICS.sd_data) {
+        displaySdData(payload);
+        return;
+    }
+
     try {
         const json = JSON.parse(payload);
 
-        if (topic === TOPICS.telemetry) {
-            appState.vibResultant = json.vib_rms_g;
-            appState.temperature = json.temp_c;
-            appState.motorState = resolveMotorStateFromJson(json.state);
-            updateChart(appState.vibResultant, appState.temperature);
-            renderDashboardState();
-        } else if (topic === TOPICS.status) {
-            if (json.firmware_hash) {
-                FIRMWARE_HASH = json.firmware_hash;
-                const hashEl = document.getElementById('firmware-hash-display');
-                if (hashEl) {
-                    hashEl.title = FIRMWARE_HASH;
-                    hashEl.textContent = FIRMWARE_HASH.slice(0, 8) + '...';
-                }
-            }
-
-            if (json.alert) {
-                appState.motorState = 'PROTECTED';
-                addBlockchainAuditRow('SHUTDOWN', `DESARME CRÍTICO! Causa: ${json.alert.cause} (Medido: ${json.alert.measured_value.toFixed(2)})`);
-                renderDashboardState();
-            } else if (json.connection) {
-                console.log('Status de Conectividade do Dispositivo recebida.');
-            }
-        } else if (topic === TOPICS.cmd_response) {
-            console.log(`Handshake de Comando Confirmado: ID ${json.command_id} -> ${json.status}`);
-        } else if (topic === TOPICS.audit) {
-            addBlockchainAuditRow(json.event_type, json.description);
+        switch (topic) {
+            case TOPICS.telemetry:
+                handleTelemetry(json);
+                break;
+            case TOPICS.status:
+                handleStatus(json);
+                break;
+            case TOPICS.cmd_response:
+                handleCmdResponse(json);
+                break;
+            case TOPICS.audit:
+                addBlockchainAuditRow(json.event_type, json.description);
+                break;
+            default:
+                break;
         }
     } catch (e) {
         console.error('Erro ao fazer parse do payload JSON MQTT: ', e);
@@ -592,6 +631,13 @@ function publishMQTTCommand(action, value = '', duration = 0) {
         } else if (action === 'INJECT_ANOMALY') {
             isSimulatedAnomalyActive = true;
             addBlockchainAuditRow('OVERRIDE', 'Injeção de anomalia manual disparada via painel.');
+        } else if (action === 'SAVE_SD') {
+            addBlockchainAuditRow('OVERRIDE', 'Simulando gravação manual de dados no Cartão SD.');
+            alert('Dados gravados no cartão SD (Simulado)!');
+        } else if (action === 'GET_SD_DATA') {
+            addBlockchainAuditRow('OVERRIDE', 'Simulando leitura de dados do Cartão SD.');
+            const simulatedCsv = "timestamp_ms,temp_c,humidity,vib_rms_g,vib_peak_g,state\n1000,45.21,60.12,0.92,1.30,1 (SIMULADO)\n2000,45.82,60.10,0.95,1.34,1 (SIMULADO)\n3000,46.12,60.08,0.94,1.33,1 (SIMULADO)\n4000,46.50,60.05,0.98,1.38,1 (SIMULADO)";
+            setTimeout(() => displaySdData(simulatedCsv), 500);
         }
         renderDashboardState();
         return;
@@ -615,6 +661,7 @@ function publishMQTTCommand(action, value = '', duration = 0) {
     message.qos = 1;
     mqttClient.send(message);
     console.log(`MQTT [PUB] (${TOPICS.cmd}) -> ${payload}`);
+    return commandId;
 }
 
 // =============================================================================
@@ -636,6 +683,67 @@ document.getElementById('btn-shutdown').addEventListener('click', function () {
 document.getElementById('btn-inject-anomaly').addEventListener('click', function () {
     publishMQTTCommand('INJECT_ANOMALY');
 });
+
+document.getElementById('btn-test-buzzer')?.addEventListener('click', function () {
+    publishMQTTCommand('TEST_BUZZER');
+});
+
+document.getElementById('btn-save-sd')?.addEventListener('click', function () {
+    publishMQTTCommand('SAVE_SD');
+});
+
+document.getElementById('btn-read-sd')?.addEventListener('click', function () {
+    const contentEl = document.getElementById('sd-data-content');
+    if (contentEl) contentEl.textContent = "Carregando logs do Cartão SD via MQTT...";
+    document.getElementById('sd-modal').style.display = 'flex';
+    
+    lastGetSdDataCmdId = publishMQTTCommand('GET_SD_DATA');
+
+    // Limpa timeout anterior se houver
+    if (sdReadTimeout) clearTimeout(sdReadTimeout);
+
+    // Timeout de 10 segundos caso a placa não responda
+    sdReadTimeout = setTimeout(() => {
+        const text = document.getElementById('sd-data-content')?.textContent;
+        if (text?.startsWith("Carregando")) {
+            displaySdData("Erro: O dispositivo não respondeu dentro do limite de tempo.\n\nVerifique se:\n1. A placa ESP32-S3 está ligada e conectada ao Wi-Fi.\n2. A dashboard e o firmware estão usando o mesmo ID do dispositivo.\n3. O Cartão SD está inserido corretamente na placa.");
+        }
+    }, 10000);
+});
+
+const closeSdModal = () => {
+    document.getElementById('sd-modal').style.display = 'none';
+    if (sdReadTimeout) {
+        clearTimeout(sdReadTimeout);
+        sdReadTimeout = null;
+    }
+};
+document.getElementById('btn-close-sd-modal')?.addEventListener('click', closeSdModal);
+document.getElementById('btn-close-sd-modal-ok')?.addEventListener('click', closeSdModal);
+
+document.getElementById('btn-download-csv')?.addEventListener('click', function () {
+    const text = document.getElementById('sd-data-content')?.textContent;
+    if (!text || text.startsWith("Carregando") || text.startsWith("Erro")) return;
+    
+    const blob = new Blob([text], { type: 'text/csv' });
+    const url = globalThis.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.setAttribute('href', url);
+    a.setAttribute('download', `telemetry_sd_${DEVICE_ID}.csv`);
+    a.click();
+    globalThis.URL.revokeObjectURL(url);
+});
+
+function displaySdData(csvContent) {
+    if (sdReadTimeout) {
+        clearTimeout(sdReadTimeout);
+        sdReadTimeout = null;
+    }
+    const contentEl = document.getElementById('sd-data-content');
+    if (contentEl) {
+        contentEl.textContent = csvContent;
+    }
+}
 
 document.getElementById('thresholds-form').addEventListener('submit', function (e) {
     e.preventDefault();
@@ -671,11 +779,66 @@ document.getElementById('thresholds-form').addEventListener('submit', function (
 });
 
 // =============================================================================
+// Controle do Tema Claro / Escuro
+// =============================================================================
+const btnThemeToggle = document.getElementById('btn-theme-toggle');
+
+function updateChartTheme(isLight) {
+    if (!realtimeChart) return;
+    const textColor = isLight ? '#64748b' : '#8e9bb5';
+    const gridColor = isLight ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.03)';
+    
+    realtimeChart.options.plugins.legend.labels.color = textColor;
+    realtimeChart.options.scales.y.grid.color = gridColor;
+    realtimeChart.options.scales.y.ticks.color = textColor;
+    realtimeChart.options.scales.y.title.color = isLight ? '#0284c7' : '#00f0ff';
+    realtimeChart.options.scales.y1.ticks.color = textColor;
+    realtimeChart.options.scales.y1.title.color = isLight ? '#f59e0b' : '#ff9f00';
+    
+    realtimeChart.update();
+}
+
+function setTheme(isLight) {
+    const iconSun = document.querySelector('.btn-theme-toggle .icon-sun');
+    const iconMoon = document.querySelector('.btn-theme-toggle .icon-moon');
+    
+    if (isLight) {
+        document.body.classList.add('light-theme');
+        localStorage.setItem('theme', 'light');
+        if (iconSun) iconSun.style.display = 'inline-block';
+        if (iconMoon) iconMoon.style.display = 'none';
+    } else {
+        document.body.classList.remove('light-theme');
+        localStorage.setItem('theme', 'dark');
+        if (iconSun) iconSun.style.display = 'none';
+        if (iconMoon) iconMoon.style.display = 'inline-block';
+    }
+    updateChartTheme(isLight);
+}
+
+btnThemeToggle?.addEventListener('click', function () {
+    const isLight = document.body.classList.contains('light-theme');
+    setTheme(!isLight);
+});
+
+// Aplica o tema salvo no localStorage na inicialização
+const savedTheme = localStorage.getItem('theme');
+if (savedTheme === 'light') {
+    setTheme(true);
+} else {
+    setTheme(false);
+}
+
+// =============================================================================
 // EXECUÇÃO INICIAL
 // =============================================================================
 globalThis.addEventListener('load', function () {
     const btnReport = document.getElementById('btn-report');
     btnReport?.addEventListener('click', function () {
+        const dashboardEl = document.querySelector('.main-dashboard');
+        if (dashboardEl) {
+            dashboardEl.dataset.date = new Date().toLocaleString('pt-BR');
+        }
         globalThis.print();
     });
 

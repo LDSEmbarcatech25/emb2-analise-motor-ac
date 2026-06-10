@@ -190,11 +190,14 @@ void task_display(void *pvParameters) {
     // =============================================================
     // CABEÇALHO (Linha 0): Nome + estado abreviado
     // =============================================================
-    const char *state_str = eState == STATE_ARMED       ? "ARM"
-                            : eState == STATE_ALERT     ? "ALR"
-                            : eState == STATE_COOLDOWN  ? "COL"
-                            : eState == STATE_PROTECTED ? "PRT"
-                                                        : "OFF";
+    const char *state_str;
+    switch (eState) {
+      case STATE_ARMED:     state_str = "ARM"; break;
+      case STATE_ALERT:     state_str = "ALR"; break;
+      case STATE_COOLDOWN:  state_str = "COL"; break;
+      case STATE_PROTECTED: state_str = "PRT"; break;
+      default:              state_str = "OFF"; break;
+    }
     snprintf(buf, sizeof(buf), " KIIRA  [%s] ", state_str);
     ssd1306_display_text(&dev, 0, buf, strlen(buf), true);
 
@@ -216,11 +219,14 @@ void task_display(void *pvParameters) {
 
     // --- PÁGINA 1: STATUS DO MOTOR ---
     case 0: {
-      const char *full_state = eState == STATE_ARMED       ? "ARMADO  "
-                               : eState == STATE_ALERT     ? "ALERTA! "
-                               : eState == STATE_COOLDOWN  ? "RESFRIAR"
-                               : eState == STATE_PROTECTED ? "PROTEG.!"
-                                                           : "DESLIG. ";
+      const char *full_state;
+      switch (eState) {
+        case STATE_ARMED:     full_state = "ARMADO  "; break;
+        case STATE_ALERT:     full_state = "ALERTA! "; break;
+        case STATE_COOLDOWN:  full_state = "RESFRIAR"; break;
+        case STATE_PROTECTED: full_state = "PROTEG.!"; break;
+        default:              full_state = "DESLIG. "; break;
+      }
       snprintf(buf, sizeof(buf), "STS: %s", full_state);
       ssd1306_display_text(
           &dev, 2, buf, strlen(buf),
@@ -283,6 +289,7 @@ void task_display(void *pvParameters) {
       EventBits_t uxBits = xEventGroupGetBits(xSystemEvents);
       bool bWifi = (uxBits & EVENT_WIFI_CONNECTED) != 0;
       bool bMqtt = (uxBits & EVENT_MQTT_CONNECTED) != 0;
+      bool bSd   = (uxBits & EVENT_SD_CARD_OK) != 0;
 
       snprintf(buf, sizeof(buf), "WiFi: %s   ", bWifi ? "OK     " : "OFFLINE");
       ssd1306_display_text(&dev, 2, buf, strlen(buf), !bWifi);
@@ -290,8 +297,10 @@ void task_display(void *pvParameters) {
       snprintf(buf, sizeof(buf), "MQTT: %s   ", bMqtt ? "OK     " : "OFFLINE");
       ssd1306_display_text(&dev, 3, buf, strlen(buf), !bMqtt);
 
-      snprintf(buf, sizeof(buf), "Umid: %5.1f %%   ", sData.humidity);
-      ssd1306_display_text(&dev, 5, buf, strlen(buf), false);
+      snprintf(buf, sizeof(buf), "SD:   %s   ", bSd ? "OK     " : "OFFLINE");
+      ssd1306_display_text(&dev, 4, buf, strlen(buf), !bSd);
+
+      ssd1306_display_text(&dev, 5, "                ", 16, false);
 
       // Device ID
       snprintf(buf, sizeof(buf), "ID:%.13s", DEVICE_ID);
