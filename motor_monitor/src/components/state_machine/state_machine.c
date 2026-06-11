@@ -51,8 +51,7 @@ void init_gpios(void) {
     gpio_set_level(PIN_RELE, 0); // Desligado no boot
 
     gpio_config_t io_conf_btn = {
-        .pin_bit_mask = (1ULL << PIN_BTN_RESET) | (1ULL << PIN_BTN_SILENCE) |
-                        (1ULL << PIN_BTN_DOWN)  | (1ULL << PIN_BTN_SELECT),
+        .pin_bit_mask = (1ULL << PIN_BTN_DOWN) | (1ULL << PIN_BTN_SELECT),
         .mode          = GPIO_MODE_INPUT,
         .pull_up_en    = GPIO_PULLUP_ENABLE,
         .pull_down_en  = GPIO_PULLDOWN_DISABLE,
@@ -190,12 +189,14 @@ void task_protection(void *pvParameters) {
         }
 
         // Rearme via botão físico local (somente em IDLE)
+#if PIN_BTN_RESET >= 0
         if (gpio_get_level(PIN_BTN_RESET) == 0) {
             if (eState == STATE_IDLE) {
                 ESP_LOGI(TAG, "SEGURANÇA: Rearme físico via botão táctil.");
                 set_system_state(STATE_ARMED);
             }
         }
+#endif
 
         vTaskDelay(pdMS_TO_TICKS(500));
     }

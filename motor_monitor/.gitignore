@@ -5,3 +5,4 @@
 .vscode/ipch
 secrets.ini
 include/config.h
+compile_commands.json

@@ -25,7 +25,7 @@
 #include "nvs_flash.h"
 #include "sdmmc_cmd.h"
 #include "ssd1306.h"
-#include "driver/gpio.h"
+#include "driver/sdmmc_host.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -66,57 +66,35 @@ esp_mqtt_client_handle_t connectivity_get_mqtt_client(void) {
 // =============================================================================
 
 bool init_sd_card(void) {
-    ESP_LOGI(TAG, "Inicializando barramento SPI para Cartão SD...");
+    ESP_LOGI(TAG, "Inicializando SD Card no modo SDMMC 1-bit...");
 
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = true,
+        .format_if_mount_failed = false,
         .max_files = 5,
-        .allocation_unit_size = 0  // 0 escolhe o padrão para máxima compatibilidade com cartões pré-formatados
+        .allocation_unit_size = 16 * 1024
     };
 
     sdmmc_card_t *card;
     const char mount_point[] = "/sdcard";
 
-    // Configura pull-ups internos nos pinos do SD Card para estabilidade física do sinal
-    gpio_pullup_en(PIN_SD_CS);
-    gpio_pullup_en(PIN_SD_MOSI);
-    gpio_pullup_en(PIN_SD_MISO);
-    gpio_pullup_en(PIN_SD_SCK);
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.max_freq_khz = 25000; // 25 MHz conforme spec da Kiira 2
 
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.max_freq_khz = 4000; // Frequência de 4 MHz para estabilizar comunicação via jumpers/fiação
+    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot_config.width = 1; // 1-bit mode
+    slot_config.clk = PIN_SD_CLK;  // CLK: GPIO 39
+    slot_config.cmd = PIN_SD_CMD;  // CMD: GPIO 38
+    slot_config.d0  = PIN_SD_D0;   // D0:  GPIO 40
 
-    spi_bus_config_t bus_cfg = {
-        .mosi_io_num = PIN_SD_MOSI,
-        .miso_io_num = PIN_SD_MISO,
-        .sclk_io_num = PIN_SD_SCK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 4000,
-    };
+    esp_err_t ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
 
-    esp_err_t ret = spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao inicializar o barramento SPI para o SD Card.");
+        ESP_LOGE(TAG, "Erro ao montar SD: %s (0x%X)", esp_err_to_name(ret), ret);
         xEventGroupClearBits(xSystemEvents, EVENT_SD_CARD_OK);
         return false;
     }
 
-    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.gpio_cs = PIN_SD_CS;
-    slot_config.host_id = host.slot;
-
-    ESP_LOGI(TAG, "Montando sistema de arquivos FAT no Cartão SD...");
-    ret = esp_vfs_fat_sdspi_mount(mount_point, &host, &slot_config, &mount_config, &card);
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erro ao montar o cartão SD: %s (0x%X). Verifique se o cartão está inserido e formatado em FAT32.", esp_err_to_name(ret), ret);
-        xEventGroupClearBits(xSystemEvents, EVENT_SD_CARD_OK);
-        return false;
-    }
-
-    ESP_LOGI(TAG, "Cartão SD montado com sucesso em %s! Capacidade: %llu MB",
-             mount_point,
+    ESP_LOGI(TAG, "SD Card montado! Capacidade: %llu MB",
              ((uint64_t)card->csd.capacity) * card->csd.sector_size / (1024 * 1024));
     xEventGroupSetBits(xSystemEvents, EVENT_SD_CARD_OK);
     return true;

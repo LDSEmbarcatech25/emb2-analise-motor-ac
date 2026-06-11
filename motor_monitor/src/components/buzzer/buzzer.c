@@ -64,10 +64,12 @@ void task_buzzer(void *pvParameters) {
         motor_state_t eState = get_system_state();
 
         // Botão para silenciar o alarme sonoro temporariamente
+#if PIN_BTN_SILENCE >= 0
         if (gpio_get_level(PIN_BTN_SILENCE) == 0) {
             xEventGroupSetBits(xSystemEvents, EVENT_SILENCE_BUZZER);
             ESP_LOGW(TAG, "BUZZER: Alarme mutado localmente pelo operador.");
         }
+#endif
 
         // Teste de Buzzer disparado remotamente
         if (uxBits & EVENT_TEST_BUZZER) {
