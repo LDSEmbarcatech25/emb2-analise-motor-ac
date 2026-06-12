@@ -1,6 +1,9 @@
 #ifndef MAIN_SSD1306_H_
 #define MAIN_SSD1306_H_
 
+#include <stdint.h>
+#include <stdbool.h>
+
 #include "driver/spi_master.h"
 #if (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0))
 #include "driver/i2c_master.h"

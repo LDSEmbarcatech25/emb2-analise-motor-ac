@@ -25,6 +25,7 @@
 #include "nvs_flash.h"
 #include "sdmmc_cmd.h"
 #include "ssd1306.h"
+#include "driver/sdmmc_host.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -64,11 +65,11 @@ esp_mqtt_client_handle_t connectivity_get_mqtt_client(void) {
 // SD Card
 // =============================================================================
 
-void init_sd_card(void) {
-    ESP_LOGI(TAG, "Inicializando barramento SPI para Cartão SD...");
+bool init_sd_card(void) {
+    ESP_LOGI(TAG, "Inicializando SD Card no modo SDMMC 1-bit...");
 
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = true,
+        .format_if_mount_failed = false,
         .max_files = 5,
         .allocation_unit_size = 16 * 1024
     };
@@ -76,36 +77,27 @@ void init_sd_card(void) {
     sdmmc_card_t *card;
     const char mount_point[] = "/sdcard";
 
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    spi_bus_config_t bus_cfg = {
-        .mosi_io_num = PIN_SD_MOSI,
-        .miso_io_num = PIN_SD_MISO,
-        .sclk_io_num = PIN_SD_SCK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 4000,
-    };
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.max_freq_khz = 25000; // 25 MHz conforme spec da Kiira 2
 
-    esp_err_t ret = spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao inicializar o barramento SPI para o SD Card.");
-        return;
-    }
+    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot_config.width = 1; // 1-bit mode
+    slot_config.clk = PIN_SD_CLK;  // CLK: GPIO 39
+    slot_config.cmd = PIN_SD_CMD;  // CMD: GPIO 38
+    slot_config.d0  = PIN_SD_D0;   // D0:  GPIO 40
 
-    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.gpio_cs = PIN_SD_CS;
-    slot_config.host_id = host.slot;
-
-    ESP_LOGI(TAG, "Montando sistema de arquivos FAT no Cartão SD...");
-    ret = esp_vfs_fat_sdspi_mount(mount_point, &host, &slot_config, &mount_config, &card);
+    esp_err_t ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
 
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Erro ao montar o cartão SD. Verifique se o cartão está inserido.");
-    } else {
-        ESP_LOGI(TAG, "Cartão SD montado com sucesso em %s! Capacidade: %llu MB",
-                 mount_point,
-                 ((uint64_t)card->csd.capacity) * card->csd.sector_size / (1024 * 1024));
+        ESP_LOGE(TAG, "Erro ao montar SD: %s (0x%X)", esp_err_to_name(ret), ret);
+        xEventGroupClearBits(xSystemEvents, EVENT_SD_CARD_OK);
+        return false;
     }
+
+    ESP_LOGI(TAG, "SD Card montado! Capacidade: %llu MB",
+             ((uint64_t)card->csd.capacity) * card->csd.sector_size / (1024 * 1024));
+    xEventGroupSetBits(xSystemEvents, EVENT_SD_CARD_OK);
+    return true;
 }
 
 // =============================================================================
@@ -316,10 +308,10 @@ void task_telemetry(void *pvParameters) {
             // Backup local no cartão SD (CSV real)
             {
                 const char *csv_path = "/sdcard/telemetry.csv";
-                bool file_exists = (access(csv_path, F_OK) == 0);
                 FILE *f = fopen(csv_path, "a");
                 if (f != NULL) {
-                    if (!file_exists) {
+                    fseek(f, 0, SEEK_END);
+                    if (ftell(f) == 0) {
                         fprintf(f, "timestamp_ms,temp_c,humidity,vib_rms_g,vib_peak_g,state\n");
                     }
                     fprintf(f, "%lld,%.2f,%.1f,%.2f,%.2f,%d\n",
@@ -403,6 +395,76 @@ void task_telemetry(void *pvParameters) {
                 cmd_success = true;
                 ESP_LOGE(TAG, "TESTE: Comando de Injeção de Falha Recebido! Subindo "
                               "vibração e calor.");
+            } else if (strcmp(sCmd.action, "TEST_BUZZER") == 0) {
+                xEventGroupSetBits(xSystemEvents, EVENT_TEST_BUZZER);
+                cmd_success = true;
+                ESP_LOGI(TAG, "TESTE: Comando de teste do buzzer disparado.");
+            } else if (strcmp(sCmd.action, "SAVE_SD") == 0) {
+                const char *csv_path = "/sdcard/telemetry.csv";
+                FILE *f = fopen(csv_path, "a");
+                if (f != NULL) {
+                    sensor_data_t sData = {0};
+                    sensors_get_last_data(&sData);
+                    motor_state_t eState = get_system_state();
+
+                    fseek(f, 0, SEEK_END);
+                    if (ftell(f) == 0) {
+                        fprintf(f, "timestamp_ms,temp_c,humidity,vib_rms_g,vib_peak_g,state\n");
+                    }
+                    fprintf(f, "%lld,%.2f,%.1f,%.2f,%.2f,%d (MANUAL)\n",
+                            (long long)(esp_timer_get_time() / 1000),
+                            sData.temperature, sData.humidity,
+                            sData.vib_resultant, sData.vib_peak, eState);
+                    fclose(f);
+                    cmd_success = true;
+                    ESP_LOGI(TAG, "SD_CARD [CSV]: Gravação manual acionada com sucesso.");
+                } else {
+                    snprintf(err_msg, sizeof(err_msg), "Cartão SD indisponivel");
+                    ESP_LOGW(TAG, "SD_CARD: Falha na gravação manual (Cartão não disponível).");
+                }
+            } else if (strcmp(sCmd.action, "GET_SD_DATA") == 0) {
+                const char *csv_path = "/sdcard/telemetry.csv";
+                FILE *f = fopen(csv_path, "r");
+                if (f != NULL) {
+                    fseek(f, 0, SEEK_END);
+                    long file_size = ftell(f);
+                    fseek(f, 0, SEEK_SET);
+
+                    long max_bytes = 4096;
+                    long bytes_to_read = (file_size > max_bytes) ? max_bytes : file_size;
+                    
+                    if (file_size > max_bytes) {
+                        fseek(f, file_size - max_bytes, SEEK_SET);
+                        char dummy[128];
+                        if (fgets(dummy, sizeof(dummy), f) == NULL) {
+                            // ignore error
+                        }
+                    }
+
+                    char *buf = malloc(max_bytes + 256);
+                    if (buf != NULL) {
+                        buf[0] = '\0';
+                        char line[128];
+                        while (fgets(line, sizeof(line), f) != NULL) {
+                            strcat(buf, line);
+                        }
+                        fclose(f);
+
+                        char pub_topic[64];
+                        snprintf(pub_topic, sizeof(pub_topic), "motor/%s/sd_data", DEVICE_ID);
+                        esp_mqtt_client_publish(s_mqtt_client, pub_topic, buf, 0, 1, 0);
+                        free(buf);
+                        cmd_success = true;
+                        ESP_LOGI(TAG, "SD_CARD [CSV]: Leitura e publicação no MQTT com sucesso.");
+                    } else {
+                        fclose(f);
+                        snprintf(err_msg, sizeof(err_msg), "Erro de alocacao de memoria");
+                        ESP_LOGE(TAG, "SD_CARD: Sem memoria para ler arquivo.");
+                    }
+                } else {
+                    snprintf(err_msg, sizeof(err_msg), "Arquivo inexistente ou SD inacessivel");
+                    ESP_LOGE(TAG, "SD_CARD: Falha na leitura (Arquivo inexistente).");
+                }
             }
 
             // Publica o Handshake/Confirmação de recebimento do Comando

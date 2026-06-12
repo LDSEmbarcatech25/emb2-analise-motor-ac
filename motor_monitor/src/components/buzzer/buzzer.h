@@ -21,6 +21,11 @@ extern "C" {
 void init_ledc_buzzer(void);
 
 /**
+ * @brief Emite um bipe de teste síncrono com a duração especificada.
+ */
+void buzzer_test_beep(uint32_t duration_ms);
+
+/**
  * @brief Task FreeRTOS de sinalização sonora.
  * Bipe rápido em estado PROTECTED/COOLDOWN, lento em ALERT.
  * Pode ser silenciada via botão PIN_BTN_SILENCE.

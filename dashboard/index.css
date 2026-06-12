@@ -675,3 +675,281 @@ input:checked + .slider:before {
         opacity: 1;
     }
 }
+
+/* =============================================================================
+   MODAL OVERLAY PARA DADOS DO SD
+   ============================================================================= */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(5, 7, 10, 0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    animation: fadeIn 0.2s ease-out;
+}
+
+.modal-content {
+    background-color: var(--bg-sidebar);
+    border: 1px solid var(--border-glow);
+    box-shadow: 0 0 32px rgba(0, 240, 255, 0.15);
+    border-radius: 16px;
+    width: 90%;
+    max-width: 700px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    animation: scaleUp 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes scaleUp {
+    from { transform: scale(0.9); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}
+
+/* Botão Flutuante de Tema Claro/Escuro */
+.theme-toggle-container-top {
+    position: fixed;
+    top: 24px;
+    right: 32px;
+    z-index: 9999;
+}
+
+.btn-theme-toggle {
+    background-color: var(--bg-sidebar);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transition: var(--transition-smooth);
+    font-size: 18px;
+}
+
+.btn-theme-toggle:hover {
+    border-color: var(--border-glow);
+    box-shadow: 0 0 15px rgba(var(--accent-rgb), 0.3);
+    transform: translateY(-2px);
+}
+
+.btn-theme-toggle:active {
+    transform: translateY(0);
+}
+
+/* Ajustes para o Tema Claro */
+body.light-theme .btn-theme-toggle {
+    background-color: #ffffff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* =============================================================================
+   TEMA CLARO PREMIUM (Light Theme Overrides)
+   ============================================================================= */
+body.light-theme {
+    --bg-main: #f3f4f6;
+    --bg-sidebar: #ffffff;
+    --bg-card: rgba(255, 255, 255, 0.8);
+    --border-color: rgba(0, 0, 0, 0.08);
+    --border-glow: rgba(0, 119, 182, 0.2);
+    
+    --text-primary: #1e293b;
+    --text-secondary: #64748b;
+    --text-muted: #94a3b8;
+    
+    --accent: #0284c7;       /* Sky blue */
+    --accent-rgb: 2, 132, 199;
+    
+    --state-armed: #10b981;   /* Green */
+    --state-alert: #f59e0b;   /* Orange */
+    --state-critical: #ef4444;/* Red */
+    --state-purple: #8b5cf6;  /* Purple */
+}
+
+/* Ajustes finos adicionais para o Tema Claro */
+body.light-theme .card {
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.04);
+}
+
+body.light-theme .chart-container-wrapper,
+body.light-theme .thresholds-editor-card,
+body.light-theme .blockchain-ledger-area {
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.04);
+}
+
+body.light-theme .form-group input {
+    background: rgba(0, 0, 0, 0.02);
+}
+
+body.light-theme .ledger-table th {
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+body.light-theme .ledger-table tr:hover td {
+    background-color: rgba(0, 0, 0, 0.01);
+}
+
+body.light-theme .btn-action {
+    background: rgba(0, 0, 0, 0.02);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+body.light-theme .btn-action:hover:not(:disabled) {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+body.light-theme .status-badge {
+    background: rgba(0, 0, 0, 0.02);
+    border-color: rgba(0, 0, 0, 0.05);
+}
+
+body.light-theme .modal-content {
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+}
+
+/* =============================================================================
+   ESTILOS DE IMPRESSÃO (Printer-Friendly PDF Report)
+   ============================================================================= */
+@media print {
+    body {
+        background: #ffffff !important;
+        color: #000000 !important;
+        font-size: 11pt;
+    }
+    
+    .app-container {
+        display: block !important;
+        height: auto !important;
+    }
+    
+    /* Esconde barra lateral, botões, formulários e elementos interativos */
+    .sidebar-header,
+    .btn-action,
+    .btn-save-thresholds,
+    .toggle-container,
+    .simulation-toggle-container,
+    .thresholds-editor-card,
+    #btn-logout,
+    #btn-connect-wallet,
+    #wallet-address-display,
+    .modal-overlay {
+        display: none !important;
+    }
+    
+    .main-dashboard {
+        padding: 0 !important;
+        margin: 0 !important;
+        max-height: none !important;
+        overflow: visible !important;
+        display: block !important;
+    }
+    
+    /* Cabeçalho do Relatório */
+    .main-dashboard::before {
+        content: "RELATÓRIO DE MONITORAMENTO PREDITIVO - KIIRA PREDICT\nGerado em: " attr(data-date) "\nID do Dispositivo: motor_ac_compressor_01\nResidência EmbarcaTech - Sistema de Segurança de Motores AC";
+        display: block;
+        text-align: center;
+        font-size: 14pt;
+        font-weight: 800;
+        margin-bottom: 25px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid #000000;
+        color: #000000;
+        white-space: pre-wrap;
+        line-height: 1.5;
+    }
+    
+    /* Ajustes dos Cards */
+    .telemetry-grid {
+        display: grid !important;
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 15px !important;
+        page-break-inside: avoid;
+        margin-bottom: 25px;
+    }
+    
+    .card {
+        background: #ffffff !important;
+        border: 1px solid #cccccc !important;
+        color: #000000 !important;
+        box-shadow: none !important;
+        page-break-inside: avoid;
+        padding: 15px !important;
+    }
+    
+    .card-header, .card-footer {
+        color: #555555 !important;
+        border-color: #dddddd !important;
+    }
+    
+    .state-indicator {
+        font-size: 20pt !important;
+    }
+    
+    .text-armed { color: #008f39 !important; text-shadow: none !important; }
+    .text-alert { color: #d07d00 !important; text-shadow: none !important; }
+    .text-protected { color: #c00000 !important; text-shadow: none !important; }
+    .text-cooldown { color: #006699 !important; text-shadow: none !important; }
+    
+    /* Gráficos */
+    .charts-and-thresholds {
+        display: block !important;
+        page-break-inside: avoid;
+        margin-bottom: 25px;
+    }
+    
+    .chart-container-wrapper {
+        background: #ffffff !important;
+        border: 1px solid #cccccc !important;
+        box-shadow: none !important;
+        padding: 15px !important;
+    }
+    
+    canvas {
+        max-width: 100% !important;
+        height: auto !important;
+    }
+    
+    /* Auditoria Blockchain */
+    .blockchain-ledger-area {
+        background: #ffffff !important;
+        border: 1px solid #cccccc !important;
+        box-shadow: none !important;
+        page-break-before: auto;
+        page-break-inside: auto;
+    }
+    
+    .ledger-table-container {
+        max-height: none !important;
+        overflow: visible !important;
+        border: 1px solid #cccccc !important;
+    }
+    
+    .ledger-table th, .ledger-table td {
+        border-color: #cccccc !important;
+        color: #000000 !important;
+        padding: 8px !important;
+    }
+    
+    .event-badge {
+        border: 1px solid #000 !important;
+        background: none !important;
+        color: #000 !important;
+        padding: 2px 6px !important;
+    }
+}

@@ -51,6 +51,9 @@ static void task_audio_record(void *pvParameters);
 // Entrada Principal (ESP-IDF App Main)
 // =============================================================================
 void app_main(void) {
+    // Atraso inicial para sincronismo do monitor serial USB após o reset
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
     ESP_LOGI(TAG, "Inicializando Dispositivo IoT de Monitoramento Preditivo...");
 
     // NVS Flash
@@ -80,13 +83,17 @@ void app_main(void) {
     init_gpios();
 
     init_ledc_buzzer();
+    buzzer_test_beep(300);
     display_boot_update(6, " [OK] Buzzer    ");
 
     pdm_mic_init();
     display_boot_update(7, " [OK] I2S Mic   ");
 
-    init_sd_card();
-    display_boot_update(5, " [OK] SD Card   ");
+    if (init_sd_card()) {
+        display_boot_update(5, " [OK] SD Card   ");
+    } else {
+        display_boot_update(5, " [ERR] SD Card  ");
+    }
 
     // ── Tasks FreeRTOS ───────────────────────────────────────
     SSD1306_t *pDev = display_get_dev();
